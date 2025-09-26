@@ -1,0 +1,495 @@
+﻿"World-Alpha为一部分数据集，后续会继续补充
+1.action动作中没有注明左右手的默认都是左手
+2.filesize 和total_action-slices，以及duration(s)都是录制结束后根据实际的值统计出来的，这里只是展示使用
+3.最终的数据集导出会在example of action_text这里列中增加start和end的对应的帧序号",,,,,,,,,,,,,,,,,,,
+task_id,task_name_EN,file size(MB),total_action-slices,duration(s),scenarios,example of action_text,example of action_text_CN,object,object_CN,data frame(fps),hand usage,# RGB Cams,# Depth Cams, # Wrist Cams, Data Collect Method,Has Camera Calibration?,pose and joint angles,Kinematic Parameters,Tactile Feedback(触觉反馈)
+327,Pickup items in the supermarket,15.33,1254,30s~48s,Supermarket,"['Retrieve cucumber from the shelf.(Pick)', 'Place the held cucumber into the plastic bag in the shopping cart.(Place)', 'Retrieve tomato from the shelf.(Pick)', 'Place the held tomato into the plastic bag in the shopping cart.(Place)', 'Retrieve corn from the shelf.(Pick)', 'Place the held corn into the shopping carts plastic bag.(Place)']","从货架上取黄瓜。（取）
+
+将手中的黄瓜放入购物车里的塑料袋中。（放）
+
+从货架上取西红柿。（取）
+
+将手中的西红柿放入购物车里的塑料袋中。（放）
+
+从货架上取玉米。（取）
+
+将手中的玉米放入购物车的塑料袋中。（放）","cucumber, plastic bag, shopping cart, tomato, corn","黄瓜, 塑料袋, 购物车, 西红柿, 玉米",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+352,Open the fridge to get food,23.55,5548,34s~59s,Home,"['Open the refrigerator door with the left arm.(PullApart)', 'Pick up the boxed iced tea from the fridge with the left arm.(Pick)', 'Place the boxed iced tea held in the left arm on the table.(Place)', 'Push the refrigerator door with the right arm.(Push)']","用左手打开冰箱门。（拉开）
+
+用左手从冰箱里拿起装盒的冰茶。（取）
+
+将左手拿着的装盒冰茶放在桌子上。（放）
+
+用右手推动冰箱门。（推）","refrigerator door, boxed iced tea, fridge, table","冰箱门, 装盒冰茶, 冰箱, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+354,Pickup items in the supermarket,31.77,1032,7s~25s,Supermarket,"['Retrieve from the shelf.(Pick)', 'Place the held red battery into the shopping cart.(Place)']","从货架上取东西。（取）
+
+将手中的红色电池放入购物车。（放）","item, red battery, shopping cart","物品, 红色电池, 购物车",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+356,Packing in the supermarket,39.99,2375,20s~35s,Supermarket,"['Grasp the left arm with white plastic bag.(Grasp)', 'Grab the blue cleansing milk on the table with the right arm.(Pick)', 'Place the held blue cleansing milk into white plastic bag.(Place)', 'Grab the hawthorn tea on the table with the right arm.(Pick)', 'Place the held hawthorn tea into white plastic bag.(Place)']","用左手抓住白色塑料袋。（抓）
+
+用右手抓取桌子上的蓝色洁面乳。（取）
+
+将手中的蓝色洁面乳放入白色塑料袋中。（放）
+
+用右手抓取桌子上的山楂茶。（取）
+
+将手中的山楂茶放入白色塑料袋中。（放）","white plastic bag, blue cleansing milk, hawthorn tea, table","白色塑料袋, 蓝色洁面乳, 山楂茶, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+357,Wash dishes with dishwasher,40.99,6848,81s~149s,Home,"['Lift the dishwasher lid with both arms.(Pull)', 'Grasp the chopsticks with the right arm.(Pick)', 'Pass the chopsticks with both hands.(HandOver)', 'Place the chopsticks held in the left arm into the dishwasher.(Place)', 'Grasp the spoon with the right arm.(Pick)', 'Pass the spoon with both hands.(HandOver)', 'Place the spoon in the dishwasher with the left arm.(Place)', 'Lift the bowl with the right arm.(Pick)', 'Pass the bowl with both hands.(HandOver)', 'Place the bowl in the dishwasher with the left arm.(Place)', 'Lift the plate with the right arm.(Pick)', 'Pass the plate with both hands.(HandOver)', 'Place the plate in the dishwasher with the left arm.(Place)', 'Pull down the dishwasher lid with both arms.(Pull)', 'Press the dishwasher lid with the left arm.(Press)', 'Press the button with the left arm to start the dishwasher.(Tap)']","用双手抬起洗碗机的盖子。（拉）
+
+用右手抓取筷子。（取）
+
+用双手递交筷子。（递交）
+
+将左手拿着的筷子放入洗碗机中。（放）
+
+用右手抓取勺子。（取）
+
+用双手递交勺子。（递交）
+
+用左手将勺子放入洗碗机中。（放）
+
+用右手抬起碗。（取）
+
+用双手递交碗。（递交）
+
+用左手将碗放入洗碗机中。（放）
+
+用右手抬起盘子。（取）
+
+用双手递交盘子。（递交）
+
+用左手将盘子放入洗碗机中。（放）
+
+用双手拉下洗碗机盖子。（拉）
+
+用左手按压洗碗机盖子。（按压）
+
+用左手按按钮启动洗碗机。（点击）","dishwasher lid, chopsticks, spoon, bowl, plate, button","洗碗机盖, 筷子, 勺子, 碗, 盘子, 按钮",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+358,Toast bread,41.99,2350,32s~62s,Home,"['Lift a piece of whole wheat toast from the basket with the left arm.(Pick)', 'Insert the whole wheat toast held by the left arm into the empty slot behind white toaster.(Place)', 'Lift a piece of whole wheat toast from the basket with the left arm.(Pick)', 'Place the whole wheat toast held in the left arm into the empty slot in front of white toaster.(Place)', 'Press the white toaster start button with both arms.(PressButton)']","烤面包操作
+
+用左手从篮子中取一片全麦面包。（取）
+
+将左手拿着的全麦面包放入白色烤面包机后方的空槽中。（放）
+
+用左手从篮子中取一片全麦面包。（取）
+
+将左手拿着的全麦面包放入白色烤面包机前方的空槽中。（放）
+
+用双手按下白色烤面包机的启动按钮。（按按钮）","whole wheat toast, basket, toaster slot, white toaster, button","全麦面包, 面包篮, 烤面包机插槽, 白色烤面包机, 按钮",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+359,Sort in the warehouse,42.99,3220,40s~50s,Industry,"['Retrieve trash bag from left material frame with the left arm.(Pick)', 'Pass the trash bag with both hands.(HandOver)', 'Place the held trash bag into the right blue target box.(Place)', 'Retrieve toothpick with the right arm from right material frame.(Pick)', 'Place the toothpick held in the right arm into the right blue target box.(Place)']","垃圾袋与牙签操作
+
+用左手从左侧物料架取垃圾袋。（取）
+
+用双手递交垃圾袋。（递交）
+
+将手中的垃圾袋放入右侧蓝色目标箱中。（放）
+
+用右手从右侧物料架取牙签。（取）
+
+将右手拿着的牙签放入右侧蓝色目标箱中。（放）","trash bag, material frame, blue target box, toothpick","垃圾袋, 物料架, 蓝色目标箱, 牙签",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+360,Packing in the supermarket,43.99,3619,28s~49s,Supermarket,"['Grasp the left arm with green felt bag.(Grasp)', 'Grab the tomato sauce on the table with the right arm.(Pick)', 'Place the grasped tomato sauce into green felt bag with the right arm.(Place)', 'Grab the steel wool on the table with the right arm.(Pick)', 'Place the grasped steel wool into green felt bag with the right arm.(Place)', 'Grasp the wash and care set on the table with the right arm.(Pick)', 'Place the grasped wash and care set into green felt bag with the right arm.(Place)']","绿色毡袋物品放置
+
+用左手抓住绿色毡袋。（抓）
+
+用右手抓取桌子上的番茄酱。（取）
+
+将抓住的番茄酱用右手放入绿色毡袋中。（放）
+
+用右手抓取桌子上的钢丝球。（取）
+
+将抓住的钢丝球用右手放入绿色毡袋中。（放）
+
+用右手抓取桌子上的洗护套装。（取）
+
+将抓住的洗护套装用右手放入绿色毡袋中。（放）","green felt bag, tomato sauce, steel wool, wash and care set, table","绿色毡袋, 番茄酱, 钢丝球, 洗护套装, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+361,Flatten shorts,44.99,2554,40s~80s,Home,['Smooth out a messy brown shorts with both arms and spread it flat.(Unfold)'],"整理棕色短裤
+
+用双手将凌乱的棕色短裤抚平并摊开。（展开）",brown shorts,棕色短裤,120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+362,Fold shorts,45.99,16466,37s~69s,Home,"['Grasp the lower pant leg and waistband of light blue denim shorts and fold them over the upper pant leg and waistband.(Fold)', 'Grasp the waistband of light blue denim shorts with both hands and fold it down to the legs.(Fold)']","折叠牛仔短裤
+
+抓住浅蓝色牛仔短裤的下裤腿和腰部，将其折叠覆盖到上裤腿和腰部。（折叠）
+
+用双手抓住浅蓝色牛仔短裤的腰部，将其折向裤腿方向。（折叠）",light blue denim shorts,浅蓝色牛仔短裤,120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+365,Sort personal care products,46.99,2515,25s~50s,Industry,"['Retrieve moisturizing oil from bottom left of the material frame with the left arm.(Pick)', 'Place the moisturizing oil held in the left arm into the blue target box on the left.(Place)', 'Retrieve pink soap from right material frame with the right arm.(Pick)', 'Pass the pink soap with both hands.(HandOver)', 'Place the pink soap held in the left arm into the blue target box on the left.(Place)']","蓝色目标箱放置物品
+
+用左手从物料架左下方取保湿油。（取）
+
+将左手拿着的保湿油放入左侧蓝色目标箱中。（放）
+
+用右手从右侧物料架取粉色肥皂。（取）
+
+用双手递交粉色肥皂。（递交）
+
+将左手拿着的粉色肥皂放入左侧蓝色目标箱中。（放）","moisturizing oil, pink soap, material frame, blue target box","保湿油, 粉色香皂, 物料架, 蓝色目标箱",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+366,Sort food,47.99,3640,40s~50s,Industry,"['Retrieve sunflower seeds from top-left corner of the material frame with the left arm.(Pick)', 'Place the sunflower seeds held in the left arm into the left blue target box.(Place)', 'Retrieve spicy red duck neck from bottom right corner of the material frame with the right arm.(Pick)', 'Pass the spicy red duck neck with both hands.(HandOver)', 'Place the spicy red duck neck held in the left arm into the left blue target box.(Place)']","向左蓝色目标箱放置物品
+
+用左手从物料架左上角取葵花籽。（取）
+
+将左手拿着的葵花籽放入左侧蓝色目标箱中。（放）
+
+用右手从物料架右下角取辣味红鸭脖。（取）
+
+用双手递交辣味红鸭脖。（递交）
+
+将左手拿着的辣味红鸭脖放入左侧蓝色目标箱中。（放）","sunflower seeds, spicy red duck neck, material frame, blue target box","葵花籽, 辣红鸭脖, 物料架, 蓝色目标箱",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+367,Take toast from toaster,48.99,1028,30s~46s,Home,"['Pick up the plain toast from the front card slot white toaster with left arm.(Pick)', 'Place the toast on the plate.(Place)', 'Pick up the plain toast from the slot after taking the white toaster.(Pick)', 'Place the toast on the plate.(Place)']","烤面包到盘子
+
+用左手从白色烤面包机前方卡槽取普通面包。（取）
+
+将面包放在盘子上。（放）
+
+取完白色烤面包机中的面包后，从卡槽中再取普通面包。（取）
+
+将面包放在盘子上。（放）","plain toast, white toaster, plate","白面包, 白色烤面包机, 盘子",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+368,Cook vegetables with oven,49.99,7056,50s~107s,"Home, Restaurant","['Grasp the oil brush from the dish with the right arm.(Pick)', 'Brush the baking pan with the oil brush held in the right arm.(Brush)', 'Place the oil brush back into the oil dish.(Place)', 'Grasp the seasoning bottle with the right arm.(Pick)', 'Pour the seasoning held in the right arm onto the steak on the baking tray.(Pour)', 'Place the seasoning bottle back on the table with the right arm.(Place)', 'Open the oven door with both hands.(Open)', 'Lift the baking tray containing steak with the right arm.(Pick)', 'Place the baking tray containing steak at the oven door with the right arm.(Place)', 'Push the baking tray containing steak into the oven with the right arm.(Push)', 'Close the oven door with the right arm.(Push)', 'Press the oven start button with the right arm.(PressButton)']","烤盘操作（烹饪牛排）
+
+用右手抓取油刷。（取）
+
+用右手拿着油刷刷烤盘。（刷）
+
+将油刷放回油碟。（放）
+
+用右手抓取调味瓶。（取）
+
+将右手拿着的调味料倒在烤盘上的牛排上。（倒）
+
+将调味瓶放回桌子上。（放）
+
+用双手打开烤箱门。（开）
+
+用右手抬起烤盘（带牛排）。（取）
+
+将烤盘（带牛排）放在烤箱门口。（放）
+
+用右手将烤盘（带牛排）推入烤箱。（推）
+
+用右手关闭烤箱门。（推）
+
+用右手按烤箱启动按钮。（按按钮）","oil brush, baking pan, seasoning bottle, steak, baking tray, oven door, oven button","油刷, 烤盘, 调味瓶, 牛排, 烤盘, 烤箱门, 烤箱按钮",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+372,Packing in the supermarket,50.99,4833,45s~72s,Supermarket,"['Grasp the left arm with blue nylon bag.(Grasp)', 'Grab the iced tea on the table with the right arm.(Pick)', 'Place the grasped iced tea into blue nylon bag.(Place)', 'Grasp the yogurt bowl on the table with the right arm.(Pick)', 'Place the grasped yogurt bowl into blue nylon bag.(Place)', 'Retrieve the pork jerky from the table with the right arm.(Pick)', 'Place the grasped pork jerky into blue nylon bag.(Place)', 'Grab the mouthwash on the table with the right arm.(Pick)', 'Place the grasped mouthwash into blue nylon bag with the right arm.(Place)']","蓝色尼龙袋装物品
+
+用左手抓住蓝色尼龙袋。（抓）
+
+用右手抓取桌子上的冰茶。（取）
+
+将抓住的冰茶放入蓝色尼龙袋中。（放）
+
+用右手抓取桌子上的酸奶碗。（取）
+
+将抓住的酸奶碗放入蓝色尼龙袋中。（放）
+
+用右手从桌子上取猪肉干。（取）
+
+将抓住的猪肉干放入蓝色尼龙袋中。（放）
+
+用右手抓取桌子上的漱口水。（取）
+
+将抓住的漱口水放入蓝色尼龙袋中。（放）","blue nylon bag, iced tea, yogurt bowl, pork jerky, mouthwash, table","蓝色尼龙袋, 冰茶, 酸奶碗, 猪肉干, 漱口水, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+374,Sort laundry and personal care products,51.99,182,12s~24s,Industry,"['Lift the wash and care set in the top-left corner of the material frame with the left arm.(Pick)', 'Place the held wash and care set in the left blue target box.(Place)']","洗护套装放置
+
+用左手从物料架左上角取洗护套装。（取）
+
+将左手拿着的洗护套装放入左侧蓝色目标箱中。（放）","wash and care set, material frame, blue target box","洗护套装, 物料架, 蓝色目标箱",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+375,Brew tea,52.99,3376,55s~110s,Home,"['Lift the right arm with white teapot.(Pick)', 'Pour the water from white teapot into the cup.(Pour)', 'Place the right arm back on the table.(Place)', 'Lift the tea bag with the left arm.(Pick)', 'Pass the tea bag with both hands.(HandOver)', 'Dip the tea bag into the cup and lift it out.(dip)', 'Dip the tea bag into the cup and lift it.(dip)', 'Place the tea bag in the cup with the right arm, leaving the tea bag tag outside the cup.(Place)']","泡茶操作
+
+用右手抬起白色茶壶。（取）
+
+将白色茶壶的水倒入杯子中。（倒）
+
+将右手放回桌子上。（放）
+
+用左手取茶包。（取）
+
+用双手递交茶包。（递交）
+
+将茶包浸入杯中后取出。（浸泡）
+
+再次将茶包浸入杯中后取出。（浸泡）
+
+用右手将茶包放入杯中，茶包标签留在杯外。（放）","white teapot, cup, tea bag, table","白色茶壶, 杯子, 茶包, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+376,Sort electronic products,53.99,2015,25s~50s,Industry,"['Retrieve smart charger from bottom left of the material frame with the left arm.(Pick)', 'Pass the smart charger with both hands.(HandOver)', 'Place the held smart charger into the right blue target box.(Place)', 'Retrieve ethernet cable with the right arm from top right corner of the material frame.(Pick)', 'Place the ethernet cable held in the right arm into the blue target box on the right.(Place)']","蓝色目标箱放置充电器与网线
+
+用左手从物料架左下角取智能充电器。（取）
+
+用双手递交智能充电器。（递交）
+
+将左手拿着的智能充电器放入右侧蓝色目标箱中。（放）
+
+用右手从物料架右上角取以太网线。（取）
+
+将右手拿着的以太网线放入右侧蓝色目标箱中。（放）","smart charger, ethernet cable, material frame, blue target box","智能充电器, 以太网线, 物料架, 蓝色目标箱",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+377,Packing in e-commerce,54.99,4764,80s~160s,Industry,"['Pick up the air column film outside the carton.(Pick)', 'Place the air column film into the carton.(Place)', 'Pick up trash bag with right arm.(Pick)', 'Place the held trash bag into the carton.(Place)', 'Pick up the air column film outside the cardboard box.(Pick)', 'Place the air column film into the carton on trash bag.(Place)']","装箱操作（气柱膜与垃圾袋）
+
+拿起纸箱外的气柱膜。（取）
+
+将气柱膜放入纸箱中。（放）
+
+用右手拿垃圾袋。（取）
+
+将手中的垃圾袋放入纸箱中。（放）
+
+拿起纸板箱外的气柱膜。（取）
+
+将气柱膜放在垃圾袋上并放入纸箱中。（放）","air column film, carton, trash bag, cardboard box","气柱膜, 纸箱, 垃圾袋, 硬纸盒",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+378,Clear table in the restaurant,55.99,8868,55s~111s,Restaurant,"['Coordinate arms to place the tray on the counter.(Place)', 'Pick up the fork on the table.(Pick)', 'Place the held fork onto the dining plate on the table.(Place)', 'Pick up the bowl on the table.(Pick)', 'Place the bowl on the plate on the counter.(Place)', 'Pick up the plate on the table.(Pick)', 'Stack the held plate onto the bowl in the dining tray.(Stack)', 'Pick up the cup on the table.(Pick)', 'Place the held cup onto the tray on the counter.(Place)', 'Pick up the napkin on the table.(Pick)', 'Place the held napkin into the plate on the table.(Place)', 'Coordinate arms to lift the tray.(Pick)']","餐具托盘整理
+
+协调双手将托盘放在操作台上。（放）
+
+拿起桌上的叉子。（取）
+
+将叉子放在桌上的餐盘上。（放）
+
+拿起桌上的碗。（取）
+
+将碗放在操作台上托盘里的盘子上。（放）
+
+拿起桌上的盘子。（取）
+
+将手中的盘子叠放在托盘碗上。（叠放）
+
+拿起桌上的杯子。（取）
+
+将杯子放在操作台托盘上。（放）
+
+拿起桌上的餐巾。（取）
+
+将餐巾放入桌上的盘子中。（放）
+
+协调双手抬起托盘。（取）","tray, fork, plate, bowl, cup, napkin, counter, dining tray, table","托盘, 叉子, 盘子, 碗, 杯子, 餐巾, 操作台, 餐盘托盘, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+380,Packing in e-commerce,56.99,6520,100s~200s,Industry,"['Pick up the air column film outside the carton.(Pick)', 'Place the air column film into the cardboard box.(Place)', 'Pick up small bottle mineral water.(Pick)', 'Place the held small bottle mineral water into the carton.(Place)', 'Pick up crispy potato chips with right arm.(Pick)', 'Place the held crispy potato chips into the cardboard box.(Place)', 'Pick up the air column film outside the cardboard box.(Pick)', 'Place the air column film held by right arm onto the items in the carton.(Place)']","装箱操作（气柱膜、矿泉水、小零食）
+
+拿起纸箱外的气柱膜。（取）
+
+将气柱膜放入纸板箱中。（放）
+
+拿起小瓶矿泉水。（取）
+
+将手中的矿泉水放入纸箱中。（放）
+
+用右手拿起脆薯片。（取）
+
+将手中的脆薯片放入纸板箱中。（放）
+
+拿起纸板箱外的气柱膜。（取）
+
+将右手拿着的气柱膜放在箱内物品上。（放）","air column film, carton, small bottle mineral water, crispy potato chips, cardboard box","气柱膜, 纸箱, 小瓶矿泉水, 薯片, 硬纸盒",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+384,Insert a book into the bookshelf,57.99,3232,38s~76s,Home,"['Lift the horizontally placed book on the shelf with the right arm.(Pick)', 'Push aside the books on the shelf with the left arm.(Push)', 'Insert the book held in the right arm into the gap cleared by the left arm on the shelf.(Insert)', 'Push the misplaced book on the shelf to the end with your right arm.(Push)']","书架整理
+
+用右手抬起横放在书架上的书。（取）
+
+用左手将书架上的书推开。（推）
+
+将右手拿着的书放入左手清理出的空隙中。（插入）
+
+用右手将放错位置的书推到书架末端。（推）","book, shelf","书, 书架",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+385,Pickup in the supermarket produce section,58.99,1284,30s~48s,Supermarket,"['Retrieve potato from the shelf.(Pick)', 'Place the held potato into the plastic bag in the shopping cart.(Place)', 'Retrieve potato from the shelf.(Pick)', 'Place the held potato into the plastic bag in the shopping cart.(Place)', 'Retrieve potato from the shelf.(Pick)', 'Place the held potato into the shopping carts plastic bag.(Place)']","购物车放土豆
+
+从货架上取土豆。（取）
+
+将手中的土豆放入购物车塑料袋中。（放）
+
+从货架上取土豆。（取）
+
+将手中的土豆放入购物车塑料袋中。（放）
+
+从货架上取土豆。（取）
+
+将手中的土豆放入购物车塑料袋中。（放）","potato, plastic bag, shopping cart","土豆, 塑料袋, 购物车",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+388,Pickup in the supermarket,59.99,552,36s~76s,Supermarket,"['Open the freezer door.(Pull)', 'Take crab stick.(Pick)', 'Place the held crab stick into the shopping cart.(Place)', 'Retrieve bacon.(Pick)', 'Place the held bacon into the shopping cart.(Place)', 'Close the freezer door.(Close)']","冷冻食品操作
+
+打开冰柜门。（拉）
+
+取蟹棒。（取）
+
+将手中的蟹棒放入购物车。（放）
+
+取培根。（取）
+
+将手中的培根放入购物车。（放）
+
+关闭冰柜门。（关）","freezer door, crab stick, bacon, shopping cart","冰柜门, 蟹棒, 培根, 购物车",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+389,Pickup in the supermarket,60.99,1248,26s~52s,Supermarket,"['Retrieve the fruit and vegetable juice from the cold storage cabinet.(Pick)', 'Place the held fruit and vegetable juice into the shopping cart.(Place)', 'Retrieve the packaged yogurt from the cold storage cabinet.(Pick)', 'Place the held packaged yogurt into the shopping cart.(Place)']","冷藏区取物放入购物车
+
+从冷藏柜取水果蔬菜汁。（取）
+
+将手中的水果蔬菜汁放入购物车。（放）
+
+从冷藏柜取包装酸奶。（取）
+
+将手中的包装酸奶放入购物车。（放）","fruit and vegetable juice, packaged yogurt, cold storage cabinet, shopping cart","果蔬汁, 包装酸奶, 冷藏柜, 购物车",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+390,Checkout and scan barcode in the supermarket,61.99,8250,71s~140s,Supermarket,"['Grab the barcode scanner on the counter with the right arm.(Pick)', 'Lift the round bottle yogurt on the cashier counter with the left arm.(Pick)', 'Aim the barcode scanner at the barcode of the held round bottle yogurt with the right arm.(Scan)', 'Place the held round bottle yogurt back on the counter.(Place)', 'Lift the salty peach meat on the counter with the left arm.(Pick)', 'Scan the barcode of the held salty peach meat with the right arm using the scanner.(Scan)', 'Place the salty peach meat held in the left arm back onto the cashier counter.(Place)', 'Lift the scouring pad on the counter with the left arm.(Pick)', 'Scan the barcode of the held scouring pad with the right arm using a barcode scanner.(Scan)', 'Place the scouring pad held in the left arm back onto the cashier counter.(Place)', 'Place the barcode scanner back on the counter.(Place)']","收银台扫码操作
+
+用右手抓取柜台上的条码扫描器。（取）
+
+用左手抬起收银台上的圆瓶酸奶。（取）
+
+用右手条码扫描器对准手中圆瓶酸奶的条码扫描。（扫描）
+
+将手中的圆瓶酸奶放回柜台。（放）
+
+用左手抬起柜台上的咸桃肉。（取）
+
+用右手扫描手中咸桃肉的条码。（扫描）
+
+将左手拿着的咸桃肉放回收银台。（放）
+
+用左手抬起柜台上的钢丝球。（取）
+
+用右手条码扫描器扫描手中钢丝球的条码。（扫描）
+
+将左手拿着的钢丝球放回柜台。（放）
+
+将条码扫描器放回柜台。（放）","barcode scanner, round bottle yogurt, salty peach meat, scouring pad, counter","条码扫描器, 圆瓶酸奶, 咸桃肉, 洗碗垫, 操作台",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+392,Brush water bottle,62.99,14655,111s~222s,Home,"['Lift the object on the table with the left arm.(Pick)', 'Empty the water from the water cup held in the left arm.(Pour)', 'Place the water cup held in the left arm under the faucet.(Hold)', 'Turn on the faucet with the right arm.(Pull)', 'Turn off the faucet with the right arm.(Push)', 'Grab the cup brush from the storage box on the counter with the right arm.(Pick)', 'Scrub the water cup held in the left arm with the cup brush in the right arm.(Brush)', 'Place the cup brush back into the storage box on the counter with the right arm.(Place)', 'Empty the water from the water cup held in the left arm.(Pour)', 'Place the water cup held in the left arm under the faucet.(Hold)', 'Turn on the faucet with the right arm.(Pull)', 'Turn off the faucet with the right arm.(Push)', 'Swing the left arm holding water cup.(Shake)', 'Empty the water from the water cup held in the left arm.(Pour)', 'Place the water cup held in the left arm back onto the table.(Place)']","清洗水杯
+
+用左手抬起桌上的物品（水杯）。（取）
+
+倒掉左手持水杯中的水。（倒）
+
+将左手持水杯放在水龙头下。（握持）
+
+用右手打开水龙头。（拉）
+
+用右手关闭水龙头。（推）
+
+用右手从柜台储物盒中抓取杯刷。（取）
+
+用右手杯刷刷左手持水杯。（刷）
+
+将杯刷放回柜台储物盒中。（放）
+
+倒掉左手水杯中的水。（倒）
+
+将左手持水杯放在水龙头下。（握持）
+
+用右手打开水龙头。（拉）
+
+用右手关闭水龙头。（推）
+
+挥动左手持水杯。（摇）
+
+倒掉左手水杯中的水。（倒）
+
+将左手水杯放回桌上。（放）","water cup, cup brush, faucet, storage box, table","水杯, 杯刷, 水龙头, 储物箱, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+398,Sort clothes,63.99,865,25s~50s,Industry,"['Retrieve blue long-sleeve shirt with the right arm from right material frame.(Pick)', 'Pass the blue long-sleeve shirt with both hands.(HandOver)', 'Place the blue long-sleeve shirt held in the left arm into the left gray target box.(Place)', 'Retrieve blue-black casual trousers from left material frame with the left arm.(Pick)', 'Place the blue-black casual trousers held in the left arm into the left gray target box.(Place)']","衣物放入灰色目标箱
+
+用右手从右侧物料架取蓝色长袖衬衫。（取）
+
+用双手递交蓝色长袖衬衫。（递交）
+
+将左手拿着的蓝色长袖衬衫放入左侧灰色目标箱。（放）
+
+用左手从左侧物料架取蓝黑色休闲裤。（取）
+
+将左手拿着的蓝黑色休闲裤放入左侧灰色目标箱。（放）","blue long-sleeve shirt, blue-black casual trousers, material frame, gray target box","蓝色长袖衬衫, 蓝黑色休闲裤, 物料架, 灰色目标箱",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+410,Water Pouring in Restaurant,64.99,3273,25s~49s,Restaurant,"['Lift the left arm with gray water bottle.(Pick)', 'Pour the water from the held gray water bottle into the nearby cup.(Pour)', 'Place the gray water bottle held in the left arm back on the table.(Pour)']","灰色水瓶倒水
+
+用左手抬起灰色水瓶。（取）
+
+将灰色水瓶的水倒入附近杯子中。（倒）
+
+将左手灰色水瓶放回桌上。（倒）","gray water bottle, cup, table","灰色水瓶, 杯子, 桌子",120,Left,2,0,4,motion capture,Yes,Yes,Yes,Yes
+414,Hang clothes with hanger,65.99,14448,57s~120s,Home,"['Lift the right arm to grasp the wooden clothes hanger on the right side of the wooden clothes hanger.(Pick)', 'Grasp the collar with the left arm and lift the garment.(Pick)', 'Hang the clothes held in the left arm on the left side of wooden clothes hanger.(Hang)', 'Grasp the left arm with the left hand.(Grasp)', 'Release the right arm holding wooden clothes hanger.(Release)', 'Grasp the right collar with the right arm.(Grasp)', 'Hang the clothes held in the right arm on the right side of wooden clothes hanger.(Hang)']","衣物挂衣架
+
+用右手抬起木制衣架右侧的衣架。（取）
+
+用左手抓住衣服衣领并抬起衣物。（取）
+
+将左手拿着的衣物挂在木制衣架左侧。（挂）
+
+用左手抓住左侧衣架。（抓）
+
+松开右手拿着的木制衣架。（释放）
+
+用右手抓住衣物右侧衣领。（抓）
+
+将右手拿着的衣物挂在木制衣架右侧。（挂）","wooden clothes hanger, garment","木质衣架, 衣物",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+421,Pick up the item to wipe away the stain,66.99,6616,42s~93s,"Home, Restaurant","['Lift the cup on the table with the left arm.(Pick)', 'Grasp the cloth on the table and wipe the stain.(Wipe)', 'Lower the right arm to put away the cleaned cloth.(Place)', 'Lower the cup held in the left arm.(Place)']","清洁桌面水杯与抹布
+
+用左手抬起桌上的杯子。（取）
+
+抓住桌上的布擦拭污渍。（擦拭）
+
+放下右手以收起清洁过的布。（放）
+
+放下左手持的杯子。（放）","cup, cloth, table","杯子, 布, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+422,Pack items for industrial logistics,67.99,16712,44s~90s,Industry,"['Lift the air column film from the table with the right arm.(Pick)', 'Place the air column film into the logistics box with the right arm.(Place)', 'Grip the bottled coffee beverage on the conveyor belt with the left arm.(Pick)', 'Place the held bottled coffee beverage into the logistics box with the left arm.(Place)', 'Clamp the bottled coffee beverage on the conveyor belt with the left arm.(Pick)', 'Place the bottled coffee beverage held in the left arm into the logistics box.(Place)', 'Lift the air column film from the table with the right arm.(Pick)', 'Place the air column film into the logistics box above the product with the right arm.(Place)']","物流箱装箱操作（气柱膜与瓶装饮料）
+
+用右手抬起桌上的气柱膜。（取）
+
+将气柱膜放入物流箱中。（放）
+
+用左手抓住传送带上的瓶装咖啡饮料。（取）
+
+将左手拿着的瓶装咖啡饮料放入物流箱中。（放）
+
+用左手夹住传送带上的瓶装咖啡饮料。（取）
+
+将左手拿着的瓶装咖啡饮料放入物流箱中。（放）
+
+用右手抬起桌上的气柱膜。（取）
+
+将右手拿着的气柱膜放在产品上方的物流箱中。（放）","air column film, bottled coffee beverage, logistics box, conveyor belt, table","气柱膜, 瓶装咖啡饮料, 物流箱, 传送带, 桌子",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+424,Clear the countertop waste,68.99,8244,18s~90s,Home,"['Open the lid of desktop trash bin with the right arm.(Open)', 'Lift the right arm with paper ball.(Pick)', 'Throw the paper ball held in the right arm into the desktop trash bin.(Drop)', 'Lift the right arm with peel.(Pick)', 'Throw the peel held in the right arm into the desktop trash bin.(Drop)', 'Lift the left arm with outer packaging skin.(Pick)', 'Pass the outer packaging skin with both hands.(HandOver)', 'Throw the held outer packaging skin into desktop trash bin.(Drop)', 'Close the lid of desktop trash bin with the right arm.(Close)']","桌面垃圾桶操作
+
+用右手打开桌面垃圾桶盖。（开）
+
+用右手抬起纸团。（取）
+
+将右手持的纸团扔进桌面垃圾桶。（扔）
+
+用右手抬起果皮。（取）
+
+将右手持的果皮扔进桌面垃圾桶。（扔）
+
+用左手抬起外包装皮。（取）
+
+用双手递交外包装皮。（递交）
+
+将手中外包装皮扔进桌面垃圾桶。（扔）
+
+用右手关闭桌面垃圾桶盖。（关）","desktop trash bin, paper ball, peel, outer packaging skin","桌面垃圾桶, 纸团, 果皮, 外包装皮",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+440,Iron clothes,69.99,8696,70s~220s,Home,"['Lift the steam iron on the right side of the right arm.(Pick)', 'Stretch the left sleeve to the left hem of the garment.(Stretch)', 'Press the left side of the garment with the steam iron held in the right hand.(Iron)', 'Release the garment held by the left arm.(Release)', 'Stretch the left arm to the bottom seam of the garment.(Stretch)', 'Press the right side of the garment with the steam iron held in the right hand.(Iron)', 'Release the clothes held by the left arm.(Release)', 'Place the steam iron held in the right hand back into the slot on the right side of white garment steamer.(Place)']","蒸汽熨斗熨烫衣物
+
+用右手抬起右侧的蒸汽熨斗。（取）
+
+将左袖拉到衣物左下摆位置。（拉伸）
+
+用右手持蒸汽熨斗熨烫衣物左侧。（熨烫）
+
+放开左手抓住的衣物。（释放）
+
+将左手拉到衣物下摆位置。（拉伸）
+
+用右手持蒸汽熨斗熨烫衣物右侧。（熨烫）
+
+放开左手抓住的衣物。（释放）
+
+将右手持的蒸汽熨斗放回白色挂烫机右侧插槽中。（放）","steam iron, garment, white garment steamer","蒸汽熨斗, 衣物, 白色挂烫机",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+446,Transport table with another robot,70.99,360,54s~110s,Industry,"['Grasp the arms of white table.(Grasp)', 'Coordinate arms to lift the grasped white table.(Lift)', 'Move forward 20 centimeters.(Move)', 'Lower the grasped white table with both arms in coordination.(Lower)', 'Release the grasped white table with both arms.(Release)']","搬运白色桌子
+
+抓住白色桌子的桌腿。（抓）
+
+协调双手抬起抓住的白色桌子。（抬起）
+
+向前移动20厘米。（移动）
+
+协调双手放下抓住的白色桌子。（放下）
+
+双手松开抓住的白色桌子。（释放）",white table,白色桌子,120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes
+475,Ironing Clothes,71.99,7224,70s~220s,Home,"['Lift the steam iron on the right side of the right arm.(Pick)', 'Stretch the left sleeve to the left hem of the garment.(Stretch)', 'Press the left side of the garment with the steam iron held in the right hand.(Iron)', 'Release the garment gripped by the left arm.(Release)', 'Stretch the left arm to the bottom seam of the garment.(Stretch)', 'Press the right side of the garment with the steam iron held in the right hand.(Iron)', 'Release the clothes held by the left arm.(Release)', 'Place the steam iron held in the right hand back into the slot on the right side of white garment steamer.(Place)']","蒸汽熨斗熨烫衣物（重复操作）
+
+用右手抬起右侧的蒸汽熨斗。（取）
+
+将左袖拉到衣物左下摆位置。（拉伸）
+
+用右手持蒸汽熨斗熨烫衣物左侧。（熨烫）
+
+放开左手抓住的衣物。（释放）
+
+将左手拉到衣物下摆位置。（拉伸）
+
+用右手持蒸汽熨斗熨烫衣物右侧。（熨烫）
+
+放开左手抓住的衣物。（释放）
+
+将右手持的蒸汽熨斗放回白色挂烫机右侧插槽中。（放）","steam iron, garment, white garment steamer","蒸汽熨斗, 衣物, 白色挂烫机",120,Both,2,0,4,motion capture,Yes,Yes,Yes,Yes

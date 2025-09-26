@@ -1,0 +1,8 @@
+2025-09-26 10:35:42,307 - CMCapture - INFO - CMCapture startup.
+2025-09-26 10:35:42,834 - CMCapture - INFO - Current work directory: D:\ly\dev\project\data_collection
+2025-09-26 10:35:43,818 - CMCapture - INFO - MainWindow launch.
+2025-09-26 10:36:07,500 - CMCapture - INFO - Application shutdown.
+2025-09-26 10:42:32,852 - CMCapture - INFO - CMCapture startup.
+2025-09-26 10:42:33,276 - CMCapture - INFO - Current work directory: D:\ly\dev\project\data_collection
+2025-09-26 10:42:33,903 - CMCapture - INFO - MainWindow launch.
+2025-09-26 11:04:08,645 - CMCapture - INFO - Application shutdown.

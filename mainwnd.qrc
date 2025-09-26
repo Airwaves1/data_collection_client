@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/images">
+        <file alias="download_files">images/downloads.png</file>
+        <file alias="merge_files">images/merge.png</file>
+        <file alias="new_project">images/new.png</file>
+        <file alias="open_project">images/open.png</file>
+        <file alias="save_project">images/save.png</file>
+        <file alias="app_icon">images/app_icon.png</file>
+        <file alias="export_files">images/export.png</file>
+    </qresource>
+</RCC>

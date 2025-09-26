@@ -1,0 +1,460 @@
+from pythonosc import udp_client
+import socket
+import xml.etree.ElementTree as et
+from PySide6 import QtWidgets, QtCore
+import peel_devices
+from peel_devices import common
+from peel_devices import files_download
+
+class XmlUdpListenThread(QtCore.QThread):
+
+    state_change = QtCore.Signal()
+
+    def __init__(self, listen_ip, listen_port, parent=None):
+        super(XmlUdpListenThread, self).__init__(parent)
+        self.host = listen_ip
+        self.port = listen_port
+        self.listen = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.listen.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.running = False
+        self.status = "OFFLINE"
+        self.info = ""
+
+    def run(self):
+
+        try:
+            self.listen.bind((self.host, self.port))
+        except IOError as e:
+            print(f"Could not bind to {self.host}:{self.port}")
+            self.running = False
+            raise e
+
+        self.running = True
+
+        while self.running:
+            try:
+                last_status = self.status
+                data, remote = self.listen.recvfrom(1024)
+
+                print("-------XMLUDP-----------")
+                print(data)
+
+                self.info = ""
+
+                tree = et.fromstring(data.strip(b"\0"))
+
+                if tree.tag == "CaptureStart":
+                    self.status = "RECORDING"
+
+                elif tree.tag == "CaptureStop":
+                    self.status = "ONLINE"
+
+                elif tree.tag == 'CaptureStopAck':
+                    self.status = "ONLINE"
+
+                elif tree.tag == 'CaptureComplete':
+                    self.status = "ONLINE"
+
+                elif tree.tag == 'CaptureStartAck' and 'Result' in tree.attrib \
+                        and 'Result' in tree.attrib:
+                    if tree.attrib['Result'] == "TRUE":
+                        self.status = "RECORDING"
+                    else:
+                        self.status = "ERROR"
+                        self.info = tree.attrib['Reason']
+
+                else:
+                    print("Unknown tag: " + str(tree.tag))
+                    self.status = "ERROR"
+
+                if self.status != last_status:
+                    self.state_change.emit()
+
+            except IOError as e:
+                if not str(e).startswith("[WinError 10038]"):
+                    raise e
+
+        print("XML UDP Stopped")
+
+    def isFinished(self):
+        return self.running == False
+
+    def kill(self):
+        self.running = False
+        self.listen.close()
+        self.listen = None
+
+
+class XmlUdpDeviceBase(peel_devices.PeelDeviceBase):
+
+    """ Base class for devices that receive an xml udp packet to start and stop
+        Sends the packet to a specific host and port.  Use host 255.255.255.255 for broadcast
+    """
+
+    def __init__(self, name=None, device_ip=None, device_port=None, remotetool_port=None, listen_ip=None, listen_port=None, fmt=None,
+                 set_capture_folder=False, enter_clip_editing=False):
+
+        super(XmlUdpDeviceBase, self).__init__(name)
+        self.device_ip = device_ip
+        self.device_port = device_port
+        self.remotetool_port = remotetool_port
+        self.listen_ip = listen_ip
+        self.listen_port = listen_port
+        self.format = fmt
+        self.packet_id = 0
+        self.udp = None
+        self.clientTransform = None
+        self.listen_thread = None
+        self.error = None
+        self.recording = False
+        self.current_take = None
+        self.set_capture_folder = set_capture_folder
+        self.enter_clip_editing = False
+
+        self.ping_timer = QtCore.QTimer()
+        self.ping_timer.timeout.connect(self.ping_timeout)
+        self.ping_timer.setInterval(common.timeout_heartbeat)
+        self.ping_timer.setSingleShot(False)
+
+        self.ping_timer.start()
+
+        self.reconfigure(name=name, host=self.device_ip, port=self.device_port, remotetool_port=self.remotetool_port,
+                         listen_ip=listen_ip, listen_port=listen_port, fmt=fmt,
+                         set_capture_folder=set_capture_folder, enter_clip_editing=enter_clip_editing)
+
+    def as_dict(self):
+        return {'name': self.name,
+                'device_ip': self.device_ip,
+                'device_port': self.device_port,
+                'remotetool_port': self.remotetool_port,
+                'listen_ip': self.listen_ip,
+                'listen_port': self.listen_port,
+                'fmt': self.format,
+                'set_capture_folder': self.set_capture_folder}
+
+    def reconfigure(self, name, host=None, port=None, remotetool_port=None, listen_ip=None, listen_port=None, fmt=None,
+                    set_capture_folder=False, enter_clip_editing=False):
+
+        if self.udp is not None:
+            self.udp.close()
+            self.udp = None
+
+        self.current_take = None
+        self.name = name
+        self.device_ip = host
+        self.device_port = port
+        self.remotetool_port = remotetool_port
+        self.listen_ip = listen_ip
+        self.listen_port = listen_port
+        if fmt is not None:
+            self.format = fmt
+        self.set_capture_folder = set_capture_folder
+        self.enter_clip_editing = enter_clip_editing
+        self.udp = None
+
+        if self.listen_thread is not None:
+            self.listen_thread.kill()
+            self.listen_thread.wait()
+            del self.listen_thread
+            self.listen_thread = None
+
+        if self.listen_ip is not None and self.listen_port is not None:
+            self.listen_thread = XmlUdpListenThread(self.listen_ip, self.listen_port)
+            self.listen_thread.state_change.connect(self.do_state)
+            self.listen_thread.start()
+
+        if self.device_ip is not None and self.device_port is not None:
+            if self.listen_thread:
+                # Use the listen thread socket so the from address is set
+                self.udp = self.listen_thread.listen
+            else:
+                self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        if self.device_ip is not None and self.remotetool_port is not None:
+            # 文件传输
+            self.clientTransform = udp_client.SimpleUDPClient(self.device_ip, self.remotetool_port)
+            # param is not use
+            self.remotetool_client_send(common.cmd_req_heatbeat, (self.device_ip, self.remotetool_port))
+
+        self.update_state()
+
+    def do_state(self):
+        self.update_state()
+
+    def get_state(self):
+
+        if not self.enabled:
+            return "OFFLINE"
+
+        if self.error is not None:
+            return "ERROR"
+
+        if self.listen_thread is not None:
+            return self.listen_thread.status
+
+        else:
+            # Device does not have a listen thread, so just assume everything is peachy
+            if self.recording:
+                return "RECORDING"
+            else:
+                return "ONLINE"
+
+    def get_info(self):
+        if self.error is not None:
+            return self.error
+        if self.listen_thread is not None:
+            return self.listen_thread.info
+        return ""
+
+    def __del__(self):
+        self.teardown()
+
+    def teardown(self):
+
+        if self.ping_timer is not None:
+            self.ping_timer.stop()
+            #self.ping_timer.timeout.disconnect(self.ping_timeout)
+            self.ping_timer = None
+
+        if self.udp is not None:
+            self.udp.close()
+            self.udp = None
+
+        if self.listen_thread is not None and not self.listen_thread.isFinished():
+            self.listen_thread.running = False
+            self.listen_thread.listen.close()
+            self.listen_thread.wait()
+
+    def ping_timeout(self):
+        self.remotetool_client_send(common.cmd_req_heatbeat, (self.device_ip, self.remotetool_port))
+
+    def command(self, command, arg):
+        if command == "record":
+            self.capture_start(arg)
+            self.recording = True
+            self.remotetool_client_send(common.cmd_req_record, (self.listen_ip, self.listen_port, True, self.current_take))
+            self.update_state('RECORDING')
+            return
+
+        if command == "stop":
+            self.capture_stop()
+            self.recording = False
+            self.remotetool_client_send(common.cmd_req_record, (self.listen_ip, self.listen_port, False, self.current_take))
+            self.update_state('OFFLINE')
+            return
+
+        if command == "play":
+            return None
+
+        if command == "takeNumber":
+            return None
+
+        if command == "takeName":
+            return None
+
+        print(f"{self.name} ignored the command: {command} {arg}")
+
+    def capture_stop(self):
+
+        if self.format == "Blade":
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>'\
+                  '<CaptureStop RESULT="SUCCESS">'\
+                  '<Name VALUE="%s"/>' % self.current_take + \
+                  '<DatabasePath VALUE="D:/DATA/BladeTesting/BladeTesting/Project 2/Capture day 1/Session 1/"/>'\
+                  '<Delay VALUE="0"/>'\
+                  '<PacketID VALUE="%d"/>' % self.packet_id + \
+                  '</CaptureStop>'
+
+        elif self.format == "Vicon":
+            # https://docs.vicon.com/pages/viewpage.action?pageId=107479581
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>\n' + \
+                    '<CaptureStop RESULT="SUCCESS">\n' + \
+                    '    <Name VALUE="%s"/>\n' % self.current_take + \
+                    '    <PacketID VALUE="%d"/>\n' % self.packet_id + \
+                    '</CaptureStop>\n'
+
+        elif self.format == "Optitrack":
+            # https://v22.wiki.optitrack.com/index.php?title=Data_Streaming
+
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>' + \
+                  '<CaptureStop>' + \
+                  '<Name VALUE="%s"/>' % self.current_take + \
+                  '<SessionName VALUE=""/>' + \
+                  '<Notes VALUE=""/>' + \
+                  '<Assets VALUE=""/>' + \
+                  '<Description VALUE=""/>' + \
+                  '<DatabasePath VALUE=""/>' + \
+                  '<TimeCode VALUE="00:00:00:00"/>' + \
+                  '<PacketID VALUE="%d"/>' % self.packet_id + \
+                  '<HostName VALUE="Motive"/>' + \
+                  '<ProcessID VALUE="22236"/>' + \
+                  '</CaptureStop>'
+
+        elif self.format == "XSENS":
+            # https://base.xsens.com/s/article/UDP-Remote-Control?language=en_US
+            msg = '<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n'
+            msg += '<CaptureStop>\n'
+            msg += '<Notes></Notes>\n'
+            msg += '</CaptureStop>\n'
+
+        elif self.format == "Rokoko":
+            # https://github.com/Rokoko/studio-command-api-examples/blob/master/README.md#trigger-messages
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>' \
+                + '<CaptureStop>' \
+                + '<Name VALUE="%s"/>' % self.current_take \
+                + '<TimeCode VALUE="00:00:00:00"/>' \
+                + '<SetActiveClip VALUE="%s"/>' % str(self.enter_clip_editing) \
+                + '<PacketID VALUE="%d"/>' % self.packet_id \
+                + '<ProcessID VALUE="22236"/>' \
+                + '</CaptureStop>'
+        else:
+            msg = '<?xml version="1.0" encoding="utf-8" ?>\n' \
+                + '<CaptureStop>\n' \
+                + '      <Name VALUE="%s" />\n' % self.current_take \
+                + '</CaptureStop>\n'
+
+        self.send(msg)
+
+    def capture_start(self, take):
+
+        self.current_take = take
+
+        if self.format == "Blade":
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>' + \
+                  '<CaptureStart><Name VALUE="%s"/>' % self.current_take + \
+                  '<Notes VALUE=""/>' + \
+                  '<Description VALUE=""/>' + \
+                  '<DatabasePath VALUE=""/>' + \
+                  '<Delay VALUE="0"/>' + \
+                  '<PacketID VALUE="%d"/>' % self.packet_id + \
+                  '</CaptureStart>\0'
+
+        elif self.format == "Vicon":
+            # https://docs.vicon.com/pages/viewpage.action?pageId=107479581
+            msg = '<CaptureStart>\n' + \
+                    '    <Name VALUE="%s"/>\n' % self.current_take + \
+                    '    <Notes VALUE=""/>\n' + \
+                    '    <Description VALUE=""/>\n' + \
+                    '    <Delay VALUE="33"/>\n' + \
+                    '    <PacketID VALUE="%d"/>\n' % self.packet_id + \
+                    '</CaptureStart>\n'
+
+        elif self.format == "Optitrack":
+            # https://v22.wiki.optitrack.com/index.php?title=Data_Streaming
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>' + \
+                  '<CaptureStart>' + \
+                  '<Name VALUE="%s"/>' % self.current_take + \
+                  '<SessionName VALUE=""/>' + \
+                  '<Notes VALUE=""/>' + \
+                  '<Assets VALUE=""/>' + \
+                  '<Description VALUE=""/>' + \
+                  '<DatabasePath VALUE=""/>' + \
+                  '<TimeCode VALUE="00:00:00:00"/>' + \
+                  '<PacketID VALUE="%d"/>' % self.packet_id + \
+                  '<HostName VALUE="Motive"/>' + \
+                  '<ProcessID VALUE="22236"/>' + \
+                  '</CaptureStart>'
+
+        elif self.format == 'XSENS':
+            # https://base.xsens.com/s/article/UDP-Remote-Control?language=en_US
+            msg = '<?xml version=\"1.0\" encoding=\"UTF-8\" ?>\n'
+            msg += '<CaptureStart>\n'
+            msg += f'<Name VALUE="{self.current_take}" />\n'
+            if self.set_capture_folder:
+                msg += '<DatabasePath VALUE="' + self.data_directory() + '" />\n'
+            msg += '<TimeCode VALUE="" />\n'
+            msg += '<Notes></Notes>\n'
+            msg += '</CaptureStart>\n'
+
+        elif self.format == "Rokoko":
+            # https://github.com/Rokoko/studio-command-api-examples/blob/master/README.md#trigger-messages
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>' \
+                + '<CaptureStart>' \
+                + '<Name VALUE="%s"/>' % self.current_take \
+                + '<TimeCode VALUE="00:00:00:00"/>' \
+                + '<PacketID VALUE="%d"/>' % self.packet_id \
+                + '<ProcessID VALUE="22236"/>' \
+                + '</CaptureStart>'
+        else:
+            msg = '<?xml version="1.0" encoding="UTF-8" standalone="no" ?>\n' \
+                + '<CaptureStart>\n' \
+                + '\t<Name VALUE="%s"/>\n' % take \
+                + '\t<PacketID VALUE="%d"/>\n' % self.packet_id \
+                + '</CaptureStart>\n'
+
+        self.send(msg)
+
+    def send(self, msg):
+        if self.udp is None:
+            self.error = "No socket"
+            print("No socket while trying to send error - " + self.name)
+
+        print(f"UDP {self.device_ip}  {self.device_port}  {self.format}")
+        print(msg)
+
+        try:
+            self.udp.sendto(msg.encode("utf8"), (self.device_ip, self.device_port))
+        except OSError as e:
+            print(f"Could not send to {self.device_ip} {self.device_port} : " + str(e))
+            self.error = str(e)
+            self.update_state("ERROR", self.error)
+            raise e
+        except OverflowError as e:
+            print(f"Could not send to {self.device_ip} {self.device_port} : " + str(e))
+            self.error = str(e)
+            self.update_state("ERROR", self.error)
+            raise e
+
+        self.error = None
+
+        self.packet_id += 1
+
+    def remotetool_client_send(self, cmd, arg):
+        try:
+            print(f"OSC: {self.device_ip}:{self.remotetool_port} {cmd} {arg}")
+            if self.clientTransform == None:
+                return
+                    
+            self.clientTransform.send_message(cmd, arg)
+
+        except OSError as e:
+            self.on_state("ERROR")
+            raise e
+        except OverflowError as e:
+            self.on_state("ERROR")
+            raise e
+        
+    def has_harvest(self):
+        return True
+
+    def harvest(self, directory):
+        thread = files_download.AllFileDownloadThread(self, directory)
+        return thread
+
+
+class AddXmlUdpWidget(peel_devices.SimpleDeviceWidget):
+    def __init__(self, settings):
+        super(AddXmlUdpWidget, self).__init__(settings, "XmlUdp", has_host=True, has_port=True,has_remotetool_port=True,
+                                              has_listen_ip=True, has_listen_port=True)
+
+        self.format_mode = QtWidgets.QComboBox()
+        self.format_mode.addItems(["Vicon", "Optitrack", "XSENS", "Blade", "Rokoko"])
+        self.format_mode.setCurrentText(settings.value(self.title + "Format", "Vicon"))
+        self.form_layout.addRow("Format", self.format_mode)
+
+    def populate_from_device(self, device):
+        self.format_mode.setCurrentText(device.format)
+
+    def update_device(self, device, data=None):
+        if data is None:
+            data = {}
+        data['fmt'] = self.format_mode.currentText()
+        return super(AddXmlUdpWidget, self).update_device(device, data)
+
+    def do_add(self):
+        # if not super().do_add():
+        #     return False
+
+        self.settings.setValue(self.title + "Format", self.format_mode.currentText())
+        return True
