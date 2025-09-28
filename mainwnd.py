@@ -2,8 +2,8 @@ import sys, os, importlib
 from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
-        QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
-                               QLineEdit)
+    QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
+                   QLineEdit, QListWidget)
 
 from PySide6.QtGui import QColor
 from PySide6.QtGui import QRegularExpressionValidator
@@ -26,6 +26,8 @@ import mylogger
 from factory_widget import QtWidgetFactory
 import app_const
 from dict_shotname import DictShotName
+from task_list_widget import TaskListWidget
+from task_property_widget import TaskPropertyPanel
 
 # 录制按钮长宽
 RecordButtonWidth = 220
@@ -149,6 +151,9 @@ class MainWindow(QMainWindow):
         self._centerWidget = QWidget()
         self.setCentralWidget(self._centerWidget)
 
+        # 为兼容旧逻辑，提供一个隐藏的占位 shot 表（不显示到UI，仅用于内部读写）
+        self._shotTable = QTableWidget(0, 4)
+
         self.create_actions()
         self.create_menus()
         self.create_tool_bars()
@@ -240,16 +245,13 @@ class MainWindow(QMainWindow):
 
     # 工程是否被修改
     def is_project_modify(self):
-        if self.init_take_no != int(self._edt_takeNo.text()):
-            return True
-        
         if self.init_take_name != self._edt_shotName.text():
             return True
         
-        if self.init_take_desc != self._edt_desc.toPlainText():
+        if self.init_take_desc != self._edt_desc.text():
             return True
         
-        if self.init_take_notes != self._edt_notes.toPlainText():
+        if self.init_take_notes != self.get_notes_text():
             return True
     
         # shot list是否被修改过
@@ -417,33 +419,30 @@ class MainWindow(QMainWindow):
 
         # 显示录制面板信息
         self._edt_shotName.setText(self.init_take_name)
-        self._edt_takeNo.setText(str(self.init_take_no))
-        self._edt_desc.setPlainText(self.init_take_desc)
-        self._edt_notes.setPlainText(self.init_take_notes)
+        self._edt_desc.setText(self.init_take_desc)
+        self._edt_notes.clear()
+        if self.init_take_notes:
+            # 将文本按行分割并添加到列表
+            lines = self.init_take_notes.split('\n')
+            for line in lines:
+                if line.strip():
+                    self._edt_notes.addItem(line.strip())
 
         self.updateLabelTakeName()
         return True
 
     def highLightNoteInfo(self, row):
-        # 清除所有高亮
-        cursor = self._edt_notes.textCursor()
-        cursor.beginEditBlock()
-        all_cursor = QTextCursor(self._edt_notes.document())
-        all_cursor.select(QTextCursor.Document)
-        default_fmt = QTextCharFormat()
-        all_cursor.setCharFormat(default_fmt)
-        cursor.endEditBlock()
-
-        if row != -1 and row < self._edt_notes.blockCount():
-            cursor = self._edt_notes.textCursor()
-            cursor.movePosition(QTextCursor.Start)
-            for i in range(row):
-                cursor.movePosition(QTextCursor.Down)
-
-            cursor.select(QTextCursor.LineUnderCursor)
-            fmt = QTextCharFormat()
-            fmt.setBackground(QColor("green"))
-            cursor.setCharFormat(fmt)
+        # 清除所有高亮 - 对于QListWidget，我们通过样式来实现
+        if row == -1:
+            # 清除所有选中状态
+            self._edt_notes.clearSelection()
+            return
+        
+        # 设置指定行的高亮
+        if 0 <= row < self._edt_notes.count():
+            self._edt_notes.setCurrentRow(row)
+            # 滚动到指定项
+            self._edt_notes.scrollToItem(self._edt_notes.item(row))
 
     def updateTakeRow(self, row, take_item):
         twItem = QTableWidgetItem(take_item._take_name)
@@ -514,10 +513,9 @@ class MainWindow(QMainWindow):
                      'devices': devices,
                      'shots': self._shot_list,
                      'takes': self._takelist,
-                     'take_no': int(self._edt_takeNo.text()),
                      'take_name': self._edt_shotName.text(),
-                     'take_description': self._edt_desc.toPlainText(),                     
-                     'take_notes': self._edt_notes.toPlainText()
+                     'take_description': self._edt_desc.text(),                     
+                     'take_notes': self.get_notes_text()
                      }
         
         save_result = app_json.save_json_file(self._save_fullpath, json_data)
@@ -735,19 +733,19 @@ class MainWindow(QMainWindow):
         self._file_tool_bar.addAction(self._export_file_act)
 
     def create_status_bar(self):
-        self.statusBar().showMessage(self.tr("Ready..."), 2000)
+        self.statusBar().showMessage("就绪...", 2000)
 
     def create_takelist(self, splitter):
         # 创建 QTableWidget
         takelistWidget = QTableWidget(splitter)
         # 设置列名
-        header_labels = [self.tr("Take Name"), 
-                         self.tr("Description"), 
-                         self.tr("Notes"), 
-                         self.tr("Start Time"), 
-                         self.tr("End Time"), 
-                         self.tr("Due"), 
-                         self.tr("Grade")]
+        header_labels = ["拍摄名称", 
+                         "描述", 
+                         "备注", 
+                         "开始时间", 
+                         "结束时间", 
+                         "持续时间", 
+                         "评分"]
         takelistWidget.setColumnCount(len(header_labels))
         takelistWidget.setHorizontalHeaderLabels(header_labels)
         # 设置表头字体颜色为黑色
@@ -843,10 +841,11 @@ class MainWindow(QMainWindow):
         # 创建 QGridLayout
         gridLayout = QGridLayout()
 
-        lblShotName = QLabel(self.tr("Shot Name:"))
+        lblShotName = QLabel("任务ID:")
         gridLayout.addWidget(lblShotName, 0, 0)
         self._edt_shotName = QtWidgetFactory.create_QLineEdit(app_const.Defualt_Edit_Shot_Name)
         self._edt_shotName.setMaxLength(app_const.Max_Shot_Name)
+        self._edt_shotName.setReadOnly(True)  # 设置为只读
         # 设置半角字符验证器
         reg_half = QRegularExpression(app_const.Regular_Char_Half)
         validator_half = QRegularExpressionValidator(self)
@@ -856,32 +855,21 @@ class MainWindow(QMainWindow):
         
         gridLayout.addWidget(self._edt_shotName, 0, 1)
 
-        lblTakeName = QLabel(self.tr("Take#:"))
-        gridLayout.addWidget(lblTakeName, 1, 0)
-        self._edt_takeNo = QtWidgetFactory.create_QLineEdit(str(app_const.Defualt_Edit_Take_No))
-        self._edt_takeNo.setMaxLength(app_const.Max_Take_No)
-        # 设置整数验证器
-        reg_number = QRegularExpression(app_const.Regular_Number)
-        validator = QRegularExpressionValidator(self)
-        validator.setRegularExpression(reg_number)
-        self._edt_takeNo.setValidator(validator)
-        
-        self._edt_takeNo.textChanged.connect(self.edt_takeNo_changed)
-        gridLayout.addWidget(self._edt_takeNo, 1, 1)
-
-        lblDesc = QLabel(self.tr("Description:"))
-        gridLayout.addWidget(lblDesc, 2, 0)
+        lblDesc = QLabel("任务名称:")
+        gridLayout.addWidget(lblDesc, 1, 0)
         #self.tr("Record description")
-        self._edt_desc = QtWidgetFactory.create_QPlainTextEdit('')
-        gridLayout.addWidget(self._edt_desc, 2, 1)
+        self._edt_desc = QtWidgetFactory.create_QLineEdit('')
+        self._edt_desc.setReadOnly(True)  # 设置为只读
+        gridLayout.addWidget(self._edt_desc, 1, 1)
 
-        lblNotes = QLabel(self.tr("Notes:"))
-        gridLayout.addWidget(lblNotes, 3, 0)
+        lblNotes = QLabel("动作脚本:")
+        gridLayout.addWidget(lblNotes, 2, 0)
         #self.tr("Record script")
-        self._edt_notes = QtWidgetFactory.create_QPlainTextEdit('')
-        gridLayout.addWidget(self._edt_notes, 3, 1)
-        gridLayout.setRowStretch(2, 1)
-        gridLayout.setRowStretch(3, 3)
+        self._edt_notes = QListWidget()
+        # QListWidget没有setReadOnly方法，通过样式和属性控制只读
+        self._edt_notes.setStyleSheet(app_css.SheetStyle_ListWidget)
+        gridLayout.addWidget(self._edt_notes, 2, 1)
+        gridLayout.setRowStretch(2, 3)
 
         vboxLayout = QVBoxLayout()
 
@@ -899,7 +887,7 @@ class MainWindow(QMainWindow):
         self._lbl_timecode.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
         
         # Record button
-        self._btn_record = QtWidgetFactory.create_QPushButton(self.tr("Record"), app_css.SheetStyle_Button_Record, self.record_clicked)
+        self._btn_record = QtWidgetFactory.create_QPushButton("录制", app_css.SheetStyle_Button_Record, self.record_clicked)
         self._btn_record.setFixedSize(RecordButtonWidth, RecordButtonHeight)
 
         vboxLayout.addWidget(self._lbl_takename)
@@ -951,57 +939,81 @@ class MainWindow(QMainWindow):
         return self._table_takelist
 
     def create_dock_windows(self):
-        self.create_shots_dock_win()
+        # 使用新的任务列表与属性面板替代旧的 Shot List
+        # 先创建任务列表，再创建属性面板，这样属性面板会在下方
+        self.create_tasks_dock_win()
+        self.create_task_property_dock()
         self.create_devices_dock_win()
 
-    def create_shots_dock_win(self):
-        dwShots = QDockWidget(self.tr("Shot List"), self)
-        dwShots.setStyleSheet(app_css.SheetStyle_DockWidget)
-        dwShots.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
-        self._widgetShots = QWidget(dwShots)
-        dwShots.setWidget(self._widgetShots)
-        self.addDockWidget(Qt.LeftDockWidgetArea, dwShots)
-        self._view_menu.addAction(dwShots.toggleViewAction())
+    def create_tasks_dock_win(self):
+        dwTasks = QDockWidget("任务列表", self)
+        dwTasks.setStyleSheet(app_css.SheetStyle_DockWidget)
+        dwTasks.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self._taskListWidget = TaskListWidget(dwTasks)
+        self._taskListWidget.task_selected.connect(self.on_task_selected)
+        dwTasks.setWidget(self._taskListWidget)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dwTasks)
+        self._view_menu.addAction(dwTasks.toggleViewAction())
+
+    def create_task_property_dock(self):
+        dwProps = QDockWidget("任务属性", self)
+        dwProps.setStyleSheet(app_css.SheetStyle_DockWidget)
+        dwProps.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        self._taskPropertyPanel = TaskPropertyPanel(dwProps)
+        dwProps.setWidget(self._taskPropertyPanel)
+        self.addDockWidget(Qt.LeftDockWidgetArea, dwProps)
+        self._view_menu.addAction(dwProps.toggleViewAction())
+
+    def on_task_selected(self, task):
+        """任务选择回调：更新属性面板与录制面板输入"""
+        # 更新左侧属性面板
+        if hasattr(self, "_taskPropertyPanel") and self._taskPropertyPanel:
+            self._taskPropertyPanel.display_task(task)
+
+        # 同步到录制面板（任务ID/任务名称）
+        task_id = task.task_id or ""
+        self._edt_shotName.setText(task_id)
         
-        vBoxlayout = QVBoxLayout()
-        self._widgetShots.setLayout(vBoxlayout)
-
-        hBoxLayout = QHBoxLayout()
-
-        self._shot_spacer = QSpacerItem(35, 35, QSizePolicy.Expanding, QSizePolicy.Minimum)
-
-        # add shot button
-        self._shot_add = QtWidgetFactory.create_QPushButton('+', app_css.SheetStyle_ToolButton, self.shotlist_add)
-        self._shot_add.setFixedSize(35, 35)
-
-        # delete shot button
-        self._shot_del = QtWidgetFactory.create_QPushButton('-', app_css.SheetStyle_ToolButton, self.shotlist_delete)
-        self._shot_del.setFixedSize(35, 35)
-
-        hBoxLayout.addItem(self._shot_spacer)
-        hBoxLayout.addWidget(self._shot_add)
-        hBoxLayout.addWidget(self._shot_del)
-        vBoxlayout.addLayout(hBoxLayout)
-
-        # 创建 TableWidget
-        self._shotTable = QTableWidget(3, 4)
-
-        # 设置列名
-        header_labels = [self.tr("Name"), self.tr("Description"), self.tr("Take#"), self.tr("Count")]
-        self._shotTable.setHorizontalHeaderLabels(header_labels)
-        self._shotTable.verticalHeader().sectionClicked.connect(self.shotTable_sectionClicked)
-
-        # 设置表头字体颜色为黑色
-        self._shotTable.horizontalHeader().setStyleSheet(app_css.SheetStyle_TableWidget_Header)
-        self._shotTable.verticalHeader().setStyleSheet(app_css.SheetStyle_TableWidget_Header)
+        # 任务名称优先中文，其次英文
+        task_name = task.task_name_cn or task.task_name_en or ""
+        self._edt_desc.setText(task_name)
         
-        # 设置表格样式
-        self._shotTable.setStyleSheet(app_css.SheetStyle_TableWidget)
+        # 解析动作脚本
+        self.parse_action_script(task.action_text_cn or "")
+        
+        self.updateLabelTakeName()
 
-        vBoxlayout.addWidget(self._shotTable)
+    def get_notes_text(self):
+        """获取动作脚本的文本内容"""
+        items = []
+        for i in range(self._edt_notes.count()):
+            item_text = self._edt_notes.item(i).text()
+            # 移除序号前缀 (例如 "1. " -> "")
+            action_text = item_text[item_text.find('. ') + 2:] if '. ' in item_text else item_text
+            items.append(action_text)
+        return '\n'.join(items)
+
+    def parse_action_script(self, action_text_cn):
+        """解析动作脚本，将换行符分隔的动作文本转换为列表显示"""
+        if not action_text_cn:
+            self._edt_notes.clear()
+            return
+
+        # 按双换行符分割动作
+        actions = action_text_cn.split('\n\n')
+        # 过滤空字符串
+        actions = [action.strip() for action in actions if action.strip()]
+
+        # 清空列表并添加动作项
+        self._edt_notes.clear()
+        for i, action in enumerate(actions):
+            item_text = f"{i+1}. {action}"
+            self._edt_notes.addItem(item_text)
+
+    # 旧的 Shot List 停靠窗口已被任务列表替代
 
     def create_devices_dock_win(self):
-        dwDevices = QDockWidget(self.tr("Device List"), self)
+        dwDevices = QDockWidget("设备列表", self)
         dwDevices.setStyleSheet(app_css.SheetStyle_DockWidget)
         dwDevices.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         self._widgetDevices = QWidget(dwDevices)
@@ -1033,7 +1045,7 @@ class MainWindow(QMainWindow):
         # 创建 Device TableWidget
         self._deviceTable = QTableWidget(0, 3)
         # 设置列名
-        header_labels = [self.tr("Name"), self.tr("Status"), self.tr("Address")]
+        header_labels = ["名称", "状态", "地址"]
         self._deviceTable.setHorizontalHeaderLabels(header_labels)
         # 设置表头字体颜色为黑色
         self._deviceTable.horizontalHeader().setStyleSheet(app_css.SheetStyle_TableWidget_Header)
@@ -1058,9 +1070,6 @@ class MainWindow(QMainWindow):
             self._will_save = True
 
     def edt_shotName_changed(self, text):
-        self.updateLabelTakeName()
-
-    def edt_takeNo_changed(self, text):
         self.updateLabelTakeName()
 
     def clearAllUiControl(self):
@@ -1142,12 +1151,15 @@ class MainWindow(QMainWindow):
             take_no = str(take_info[0] + 1)
 
         self._edt_shotName.setText(shot_name)
-        self._edt_takeNo.setText(take_no)
-        self._edt_desc.setPlainText(shot_desc)
+        self._edt_desc.setText(shot_desc)
         for shot in self.init_shot_list:
             if shot['name'] == shot_name:
                 if 'notes' in shot:
-                    self._edt_notes.setPlainText(shot['notes'])
+                    self._edt_notes.clear()
+                    lines = shot['notes'].split('\n')
+                    for line in lines:
+                        if line.strip():
+                            self._edt_notes.addItem(line.strip())
         
         self.updateLabelTakeName()
 
@@ -1157,17 +1169,11 @@ class MainWindow(QMainWindow):
             #录制中
             self.mod_peel.command('stop', self._lbl_takename.text())
             self._lbl_takename.setStyleSheet(app_css.SheetStyle_Label)
-            self._btn_record.setText(self.tr("Record"))
+            self._btn_record.setText("录制")
             self._record_secord = 0
             self._recording = False
 
             self._time_record.stop()
-
-            input_take_no = self._edt_takeNo.text()
-            if input_take_no is not None and len(input_take_no) > 0:
-                newTakeNo = int(input_take_no) + 1
-                self._edt_takeNo.setText(str(newTakeNo))
-                self.updateLabelTakeName()
 
             take_last = self._takelist[-1]
             take_last._end_time = datetime.now()
@@ -1190,16 +1196,13 @@ class MainWindow(QMainWindow):
             self._device_add.setEnabled(True)
             self._device_del.setEnabled(True)
 
-            self.statusBar().showMessage(self.tr("Ready..."), 2000)
+            self.statusBar().showMessage("就绪...", 2000)
             self.highLightNoteInfo(-1)
             self.save(True)
         else:
             #未录制
             shot_name = self._edt_shotName.text()
-            input_take_no = self._edt_takeNo.text()
-            take_no = 1
-            if input_take_no is not None and len(input_take_no) > 0:
-                take_no = int(input_take_no)
+            take_no = 1  # 固定为1，不再使用拍摄次数
             take_name = self._lbl_takename.text()
             if take_name in self._dict_takename:
                 msg = self.tr(" has existed. Please modify shot name or take no.")
@@ -1218,8 +1221,8 @@ class MainWindow(QMainWindow):
             
             self._recording = True
 
-            strDesc = self._edt_desc.toPlainText()
-            strNotes = self._edt_notes.toPlainText()
+            strDesc = self._edt_desc.text()
+            strNotes = self.get_notes_text()
             takeItem = TakeItem(shot_name, 
                                 take_no, 
                                 take_name, 
@@ -1257,7 +1260,7 @@ class MainWindow(QMainWindow):
             self.cmbEval.currentIndexChanged.connect(self.onComboBoxIndexChanged)
             self._table_takelist.setCellWidget(newRow, 6, self.cmbEval)
             self._table_takelist.scrollToBottom()
-            self.statusBar().showMessage(self.tr("Recording..."), 0)
+            self.statusBar().showMessage("录制中...", 0)
             #self._edt_notes.setReadOnly(True)
             #self.highLightNoteInfo()
 
@@ -1272,9 +1275,12 @@ class MainWindow(QMainWindow):
         self._will_save = True
 
     def UpdateActionInfo(self, row, startFrame, endFrame):
-        actionName = self._edt_notes.document().findBlockByNumber(row).text()[2:]
-        actionInfo = ActionInfo(actionName, startFrame, endFrame)
-        self._takelist[-1].add_action(actionInfo)
+        if 0 <= row < self._edt_notes.count():
+            item_text = self._edt_notes.item(row).text()
+            # 移除序号前缀 (例如 "1. " -> "")
+            actionName = item_text[item_text.find('. ') + 2:] if '. ' in item_text else item_text
+            actionInfo = ActionInfo(actionName, startFrame, endFrame)
+            self._takelist[-1].add_action(actionInfo)
 
     # 根据shot name更新ShotList的序号列
     def update_shotlist(self):
@@ -1314,7 +1320,17 @@ class MainWindow(QMainWindow):
         # self._table_takelist.setItem(lastRow, 5, QTableWidgetItem(str(take_last._due.seconds) + ' sec'))
 
     def updateLabelTakeName(self):
-        result = app_common.get_shot_name(self._edt_shotName, self._edt_takeNo)
+        # 使用任务ID和任务名称生成显示名称
+        task_id = self._edt_shotName.text()
+        task_name = self._edt_desc.text()
+        if task_id and task_name:
+            result = f"{task_id}_{task_name}"
+        elif task_id:
+            result = task_id
+        elif task_name:
+            result = task_name
+        else:
+            result = "未选择任务"
         self._lbl_takename.setText(result)
 
     def record_tick(self):
