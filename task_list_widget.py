@@ -186,20 +186,23 @@ class TaskListWidget(QWidget):
         
         if file_dialog.exec() == QFileDialog.Accepted:
             file_path = file_dialog.selectedFiles()[0]
-            print(f"[DEBUG] 选择的文件路径: {file_path}")
             
             if self.data_manager.load_from_excel(file_path):
-                print(f"[DEBUG] Excel导入成功，任务数量: {len(self.data_manager.tasks)}")
                 self.refresh_ui()
+                # 保存当前Excel文件路径
+                self._current_excel_path = file_path
                 QMessageBox.information(self, "Success", 
                                       f"Successfully imported {len(self.data_manager.tasks)} tasks")
+                
+                # 通知主窗口数据已修改
+                if hasattr(self.parent(), 'parent') and hasattr(self.parent().parent(), '_will_save'):
+                    self.parent().parent()._will_save = True
+                    print("已标记项目为已修改状态")
             else:
-                print(f"[DEBUG] Excel导入失败")
                 QMessageBox.warning(self, "Error", "Failed to import Excel file")
 
     def refresh_ui(self):
         """刷新界面"""
-        print(f"[DEBUG] 刷新UI，当前任务数量: {len(self.data_manager.tasks)}")
         self.update_scenario_filter()
         self.update_task_tree()
 

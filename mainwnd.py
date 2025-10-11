@@ -1,9 +1,9 @@
-import sys, os, importlib
+import sys, os, importlib, json
 from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
     QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
-                   QLineEdit, QListWidget)
+                   QLineEdit, QListWidget, QTextEdit, QComboBox)
 
 from PySide6.QtGui import QColor
 from PySide6.QtGui import QRegularExpressionValidator
@@ -28,6 +28,8 @@ import app_const
 from dict_shotname import DictShotName
 from task_list_widget import TaskListWidget
 from task_property_widget import TaskPropertyPanel
+from service.db_controller import DBController
+from uuid import uuid4
 
 # 录制按钮长宽
 RecordButtonWidth = 220
@@ -103,16 +105,22 @@ class MainWindow(QMainWindow):
             return
         
         self.mod_peel.startup()
+        # 数据控制器与当前采集者
+        self.db_controller = DBController()
+        self.current_collector: dict | None = None
+        
+        # 数据库自动保存配置
+        self.auto_save_to_db = True  # 默认开启自动保存到数据库
 
         self.mod_merge_fbx = None
         self.func_merge_fbx = None
         self.init_device_list = []
         self.init_shot_list = []
-        self.init_take_list = []
 
         # 录制面板初始数据
         self.init_take_no = app_const.Defualt_Edit_Take_No
-        self.init_take_name = app_const.Defualt_Edit_Shot_Name
+        # 不再保存项目级takename
+        self.init_take_name = ""
         self.init_take_notes = ''
         self.init_take_desc = ''
 
@@ -137,6 +145,9 @@ class MainWindow(QMainWindow):
         self._dict_takename = {}
         # shotname 分组
         self._dict_shotname = DictShotName()
+        
+        # 自增ID管理
+        self._next_episode_id = 1
 
         self.translator = None
         self.switch_language(app_const.Lang_CHS)
@@ -219,6 +230,13 @@ class MainWindow(QMainWindow):
             self._dict_shotname.clear()
             self._takelist = []
             self._all_device = []
+            self.init_device_list = []  # 重置初始设备列表
+            self.init_shot_list = []   # 重置初始shot列表
+            
+            # 清空任务列表数据
+            if hasattr(self, '_taskListWidget') and self._taskListWidget:
+                self._taskListWidget.data_manager.tasks.clear()
+                self._taskListWidget.refresh_ui()
 
             self.mod_peel.teardown()
             self.clearAllUiControl()
@@ -236,7 +254,12 @@ class MainWindow(QMainWindow):
         
         reply = QMessageBox.question(self, AppName, self.tr("Save current open project?"), QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
         if reply == QMessageBox.Yes:
-            self.save(True)
+            saved = self.save(True)
+            if not saved:
+                # 保存失败，询问用户是否继续退出
+                retry_reply = QMessageBox.question(self, AppName, self.tr("Save failed. Do you want to exit without saving?"), QMessageBox.Yes | QMessageBox.No)
+                if retry_reply == QMessageBox.No:
+                    return False  # 用户选择不退出
 
         if reply == QMessageBox.Cancel:
             return False
@@ -245,17 +268,28 @@ class MainWindow(QMainWindow):
 
     # 工程是否被修改
     def is_project_modify(self):
-        if self.init_take_name != self._edt_shotName.text():
+        # 检查是否有任务数据被导入
+        if hasattr(self, '_taskListWidget') and self._taskListWidget and len(self._taskListWidget.data_manager.tasks) > 0:
             return True
         
-        if self.init_take_desc != self._edt_desc.text():
+        # 检查是否有设备被添加或修改
+        if len(self._all_device) != len(self.init_device_list):
             return True
         
-        if self.init_take_notes != self.get_notes_text():
-            return True
-    
+        # 检查设备配置是否被修改
+        for i, device in enumerate(self._all_device):
+            if i < len(self.init_device_list):
+                init_device = self.init_device_list[i]
+                if device.name != init_device.get('name', ''):
+                    return True
+                if device.address != init_device.get('address', ''):
+                    return True
+        
         # shot list是否被修改过
         shot_list_count_new = len(self._shot_list)
+        if len(self.init_shot_list) != shot_list_count_new:
+            return True
+            
         if len(self.init_shot_list) == shot_list_count_new:
             for i in range(shot_list_count_new):
                 item_shot_new = self._shot_list[i]
@@ -320,22 +354,25 @@ class MainWindow(QMainWindow):
         else:
             self.init_shot_list = []
 
-        if 'takes' in json_data:
-            self.init_take_list = json_data['takes']
-        else:
-            self.init_take_list = []
+        # 自动加载保存的Excel文件
+        if 'excel_file_path' in json_data and json_data['excel_file_path']:
+            excel_path = json_data['excel_file_path']
+            if os.path.exists(excel_path) and hasattr(self, '_taskListWidget') and self._taskListWidget:
+                try:
+                    if self._taskListWidget.data_manager.load_from_excel(excel_path):
+                        self._taskListWidget.refresh_ui()
+                        # 保存当前Excel文件路径
+                        self._taskListWidget._current_excel_path = excel_path
+                        print(f"已自动加载Excel文件: {excel_path}")
+                        print(f"加载了 {len(self._taskListWidget.data_manager.tasks)} 个任务数据")
+                    else:
+                        print(f"自动加载Excel文件失败: {excel_path}")
+                except Exception as e:
+                    print(f"自动加载Excel文件时出错: {e}")
+            else:
+                print(f"Excel文件不存在或路径无效: {excel_path}")
 
-        if 'take_no' in json_data:
-            self.init_take_no = int(json_data['take_no'])
-
-        if 'take_name' in json_data:
-            self.init_take_name = json_data['take_name']
-
-        if 'take_notes' in json_data:
-            self.init_take_notes = json_data['take_notes']
-
-        if 'take_description' in json_data:
-            self.init_take_desc = json_data['take_description']
+        # 不再读取项目级takename/描述/脚本
         
         self._shotTable.setRowCount(len(self.init_shot_list))
         row = 0
@@ -358,49 +395,8 @@ class MainWindow(QMainWindow):
             
         self._takelist.clear()
         self._dict_takename.clear()
-        for one_take in self.init_take_list:
-            if one_take is None or len(one_take) == 0:
-                continue
-            
-            take = TakeItem()
-            shot_name = one_take['shot_name']
-            if shot_name is not None:
-                take._shot_name = shot_name
-
-            take_no = one_take['take_no']
-            if take_no is not None:
-                take._take_no = take_no
-
-            take_name = one_take['take_name']
-            if take_name is not None:
-                take._take_name = take_name
-                self._dict_takename[take_name] = ''
-
-            take_desc = one_take['take_desc']
-            if take_desc is not None:
-                take._take_desc = take_desc
-            
-            take_notes = one_take['take_notes']
-            if take_notes is not None:
-                take._take_notes = take_notes
-            
-            start_time = one_take['start_time']
-            if start_time is not None:
-                take._start_time = datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S.%f")
-
-            end_time = one_take['end_time']
-            if end_time is not None:
-                take._end_time = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S.%f")
-            
-            due = one_take['due']
-            if due is not None:
-                take._due = float(due)
-
-            eval = one_take['eval']
-            if eval is not None:
-                take._eval = eval
-
-            self._takelist.append(take)
+        
+        # 设置UI状态：不从项目文件填充描述与脚本
 
         #update ui
         row = 0
@@ -417,16 +413,17 @@ class MainWindow(QMainWindow):
         self._open_folder = os.path.dirname(json_file)
         self.setWindowTitle(f"{AppName} - {self._save_fullpath}")
 
-        # 显示录制面板信息
-        self._edt_shotName.setText(self.init_take_name)
-        self._edt_desc.setText(self.init_take_desc)
+        # 初始化设备列表，用于检测修改
+        self.init_device_list = []
+        for d in self._all_device:
+            self.init_device_list.append({
+                'name': d.name,
+                'address': d.address,
+                'status': d.status
+            })
+
+        # 显示录制面板信息：不从项目文件填充描述与脚本
         self._edt_notes.clear()
-        if self.init_take_notes:
-            # 将文本按行分割并添加到列表
-            lines = self.init_take_notes.split('\n')
-            for line in lines:
-                if line.strip():
-                    self._edt_notes.addItem(line.strip())
 
         self.updateLabelTakeName()
         return True
@@ -445,34 +442,88 @@ class MainWindow(QMainWindow):
             self._edt_notes.scrollToItem(self._edt_notes.item(row))
 
     def updateTakeRow(self, row, take_item):
-        twItem = QTableWidgetItem(take_item._take_name)
+        # 任务ID (shot_name)
+        twItem = QTableWidgetItem(take_item._shot_name)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 0, twItem)
 
+        # 任务名称 (take_desc)
         twItem = QTableWidgetItem(take_item._take_desc)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 1, twItem)
         
-        twItem = QTableWidgetItem(take_item._take_notes)
+        # 开始时间
+        twItem = QTableWidgetItem(take_item._start_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 2, twItem)
 
-        twItem = QTableWidgetItem(take_item._start_time.strftime('%H:%M:%S'))
+        # 结束时间
+        twItem = QTableWidgetItem(take_item._end_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 3, twItem)
 
-        twItem = QTableWidgetItem(take_item._end_time.strftime('%H:%M:%S'))
-        twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 4, twItem)
-
+        # 持续时间
         twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_item._due)} sec")
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 5, twItem)
+        self._table_takelist.setItem(row, 4, twItem)
+        
+        # 状态下拉框
+        status_combo = QComboBox()
+        status_combo.addItems(["待审核", "已接受", "已拒绝", "NG"])
+        
+        # 根据当前状态设置选中项
+        status_map = {
+            "pending": "待审核",
+            "accepted": "已接受", 
+            "rejected": "已拒绝",
+            "ng": "NG"
+        }
+        current_status_text = status_map.get(take_item._task_status, "待审核")
+        status_combo.setCurrentText(current_status_text)
+        
+        # 连接状态变更事件
+        status_combo.currentTextChanged.connect(lambda text, r=row: self.on_status_changed(r, text))
+        
+        self._table_takelist.setCellWidget(row, 5, status_combo)
 
-        #评分
-        self.cmbEval = QtWidgetFactory.create_QComboBox(app_const.ComboBox_Eval_Default, take_item._eval)
-        self.cmbEval.currentIndexChanged.connect(self.onComboBoxIndexChanged)
-        self._table_takelist.setCellWidget(row, 6, self.cmbEval)
+    def on_status_changed(self, row, status_text):
+        """处理状态变更事件"""
+        try:
+            if 0 <= row < len(self._takelist):
+                take_item = self._takelist[row]
+                
+                # 将中文状态转换为英文状态
+                status_map = {
+                    "待审核": "pending",
+                    "已接受": "accepted",
+                    "已拒绝": "rejected", 
+                    "NG": "ng"
+                }
+                new_status = status_map.get(status_text, "pending")
+                
+                # 更新TakeItem状态
+                take_item._task_status = new_status
+                
+                print(f"任务 {take_item._shot_name} 状态已更新为: {status_text} ({new_status})")
+                
+                # 如果任务已保存到数据库，则更新数据库状态
+                if hasattr(take_item, '_task_id') and take_item._task_id:
+                    self._update_task_status_in_db(take_item._task_id, new_status)
+                    
+        except Exception as e:
+            print(f"更新状态失败: {e}")
+
+    def _update_task_status_in_db(self, task_id, status):
+        """更新数据库中的任务状态"""
+        try:
+            if self.db_controller:
+                success = self.db_controller.update_task_status(task_id, status)
+                if success:
+                    print(f"数据库任务 {task_id} 状态已更新为: {status}")
+                else:
+                    print(f"更新数据库任务 {task_id} 状态失败")
+        except Exception as e:
+            print(f"更新数据库状态失败: {e}")
 
     def save(self, silence = False):
         # 判断是否第一次保存
@@ -481,25 +532,27 @@ class MainWindow(QMainWindow):
             filename = f"myshot_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             fileNames = dialog.getSaveFileName(self, self.tr("Save file"),filename,'json files (*.json);; All files (*)')
 
-            if len(fileNames) == 0:
-                return
+            if len(fileNames) == 0 or not fileNames[0]:
+                return False
             
             self._save_fullpath = fileNames[0]
 
         saved = self.save_project_file()
         if saved:
             self._will_save = False
-
-        self.setWindowTitle(f"{AppName} - {self._save_fullpath}")
-        self.statusBar().showMessage(f"Saved '{self._save_fullpath}'", 2000)
-        self._will_save = False
+            self.setWindowTitle(f"{AppName} - {self._save_fullpath}")
+            self.statusBar().showMessage(f"Saved '{self._save_fullpath}'", 2000)
 
         # 静默不弹框
         if silence:
-            return
+            return saved
         
         if saved:
             QMessageBox.information(self, AppName, self.tr("Project file saved."))
+        else:
+            QMessageBox.warning(self, AppName, self.tr("Project file save failed."))
+            
+        return saved
 
     def save_project_file(self):
 
@@ -507,15 +560,19 @@ class MainWindow(QMainWindow):
             return False
         
         self.update_shot_list_model()
-        devices = self.mod_peel.get_devices_data()
+        # 只保存设备配置信息，不包含takes数据
+        devices = self.mod_peel.get_device_config_data()
+        
+        # 获取表格文件路径
+        excel_file_path = ""
+        if hasattr(self, '_taskListWidget') and self._taskListWidget:
+            # 获取当前加载的Excel文件路径（如果有的话）
+            excel_file_path = getattr(self._taskListWidget, '_current_excel_path', "")
         
         json_data = { 
                      'devices': devices,
                      'shots': self._shot_list,
-                     'takes': self._takelist,
-                     'take_name': self._edt_shotName.text(),
-                     'take_description': self._edt_desc.text(),                     
-                     'take_notes': self.get_notes_text()
+                     'excel_file_path': excel_file_path
                      }
         
         save_result = app_json.save_json_file(self._save_fullpath, json_data)
@@ -563,9 +620,454 @@ class MainWindow(QMainWindow):
             self._will_save = True
 
     def export_file(self):
-        window = ExportWidget(self)
-        window.show()
-        window.exportBtn.clicked.connect(lambda: self.mod_peel.command('Export', window.path_label.text()))
+        """从数据库导出TaskInfo到选定文件夹: task_info/<task_id>/<task_id>.json"""
+        # 选择导出根目录
+        export_dir = QFileDialog.getExistingDirectory(self, self.tr("选择导出文件夹"), self._open_folder or os.getcwd())
+        if not export_dir:
+            return
+        
+        root_dir = os.path.join(export_dir, 'task_info')
+        os.makedirs(root_dir, exist_ok=True)
+        
+        # 获取任务列表（简化：假设后端提供列表接口或在客户端已有task_ids）
+        try:
+            # 目标：按业务任务ID(如367)导出。优先从当前会话的录制条目收集业务task_id（_shot_name）
+            business_task_ids = []
+            for take in self._takelist:
+                if getattr(take, '_shot_name', None):
+                    business_task_ids.append(str(take._shot_name))
+            # 去重
+            business_task_ids = list(dict.fromkeys(business_task_ids))
+
+            # 如果当前会话没有可用业务ID，则从后端读取所有TaskInfo并汇总其task_id
+            if not business_task_ids:
+                resp = self.db_controller.list_task_infos(limit=1000, offset=0) or []
+                if isinstance(resp, dict):
+                    items = resp.get('results', []) or []
+                elif isinstance(resp, list):
+                    items = resp
+                else:
+                    items = []
+                biz_set = []
+                for it in items:
+                    try:
+                        if isinstance(it, dict) and it.get('task_id'):
+                            biz_set.append(str(it.get('task_id')))
+                    except Exception:
+                        continue
+                business_task_ids = list(dict.fromkeys(biz_set))
+            
+            if not business_task_ids:
+                QMessageBox.information(self, self.tr("导出"), self.tr("没有可导出的任务"))
+                return
+            
+            exported = 0
+            for biz_id in business_task_ids:
+                # 从后端拉取全部TaskInfo并过滤出该业务ID的所有episode
+                resp = self.db_controller.list_task_infos(limit=2000, offset=0) or []
+                if isinstance(resp, dict):
+                    items = resp.get('results', []) or []
+                elif isinstance(resp, list):
+                    items = resp
+                else:
+                    items = []
+                matched = [it for it in items if isinstance(it, dict) and str(it.get('task_id')) == str(biz_id)]
+                if not matched:
+                    continue
+
+                export_array = []
+                collector_obj_cache = None
+                for data in matched:
+                    # 组织collector对象：{ collector_organization, collector_id, collector_name }
+                    collector_info = data.get('collector')
+                    collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
+                    try:
+                        if isinstance(collector_info, dict):
+                            col = collector_info
+                            collector_obj = {
+                                "collector_organization": col.get('collector_organization', ''),
+                                "collector_id": col.get('collector_id', ''),
+                                "collector_name": col.get('collector_name', '')
+                            }
+                        elif isinstance(collector_info, int):
+                            col = self.db_controller.get_collector(collector_info) or {}
+                            collector_obj = {
+                                "collector_organization": col.get('collector_organization', ''),
+                                "collector_id": col.get('collector_id', ''),
+                                "collector_name": col.get('collector_name', '')
+                            }
+                        elif isinstance(collector_info, str):
+                            # 兼容旧格式: "id_组织_编号_姓名"，尽力解析组织/编号/姓名
+                            parts = collector_info.split('_') if collector_info else []
+                            if len(parts) >= 4:
+                                collector_obj = {
+                                    "collector_organization": parts[1],
+                                    "collector_id": parts[2],
+                                    "collector_name": parts[3]
+                                }
+                            else:
+                                collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": collector_info}
+                        else:
+                            collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
+                    except Exception:
+                        collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
+                    if (collector_obj_cache is None) and any(collector_obj.values()):
+                        collector_obj_cache = collector_obj
+
+                    export_array.append({
+                        "episode_id": int(data.get('episode_id') or data.get('id')),
+                        "label_info": {"action_config": data.get('action_config', [])},
+                        "task_name": data.get('task_name', ''),
+                        "init_scene_text": data.get('init_scene_text', ''),
+                        "collector": collector_obj if any(collector_obj.values()) else (collector_obj_cache or {"collector_organization": "", "collector_id": "", "collector_name": ""})
+                    })
+
+                # 写入 task_info/<biz_id>.json 为数组，包含所有episode
+                output_file = os.path.join(root_dir, f"{biz_id}.json")
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(export_array, f, ensure_ascii=False, indent=2)
+                exported += 1
+            
+            QMessageBox.information(self, self.tr("导出完成"), self.tr(f"已导出 {exported} 个任务到: {root_dir}"))
+        except Exception as e:
+            QMessageBox.warning(self, self.tr("导出失败"), self.tr(f"导出发生异常: {e}"))
+
+    def _export_task_data(self, task_id, takes):
+        """导出单个任务的数据"""
+        try:
+            # 获取任务信息（从任务列表组件）
+            task_info = self._get_task_info(task_id)
+            
+            # 构建导出数据
+            export_data = []
+            
+            for take_item in takes:
+                # 解析动作脚本为action_config格式
+                # 将take_notes转换为列表格式
+                notes_list = take_item._take_notes.split('\n') if take_item._take_notes else []
+                action_config = self._parse_actions_to_config(notes_list, take_item._actions, task_info)
+                
+                # 使用英文任务名称，过滤换行符
+                task_name_en = self._clean_text(task_info.get('task_name_en', ''))
+                if not task_name_en:
+                    task_name_en = self._clean_text(take_item._take_desc)
+                
+                # 使用场景信息
+                scene_text = self._clean_text(task_info.get('scenarios', ''))
+                if not scene_text:
+                    scene_text = f"Task {task_id}: {task_name_en}"
+                
+                episode_data = {
+                    "episode_id": self._get_next_episode_id(),
+                    "label_info": {
+                        "action_config": action_config
+                    },
+                    "task_name": task_name_en,
+                    "init_scene_text": scene_text
+                }
+                export_data.append(episode_data)
+            
+            # 保存到文件
+            output_file = os.path.join("data", "output", "task_info", f"task_{task_id}.json")
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"成功导出任务 {task_id} 到 {output_file}")
+            return True
+            
+        except Exception as e:
+            print(f"导出任务 {task_id} 失败: {e}")
+            return False
+
+    def _get_task_info(self, task_id):
+        """获取任务信息"""
+        try:
+            # 从任务列表组件获取任务信息
+            if hasattr(self, '_taskListWidget') and self._taskListWidget:
+                task = self._taskListWidget.data_manager.get_task_by_id(task_id)
+                if task:
+                    return {
+                        'task_name_en': task.task_name_en,
+                        'task_name_cn': task.task_name_cn,
+                        'scenarios': task.scenarios,
+                        'action_text_en': task.action_text_en,
+                        'action_text_cn': task.action_text_cn
+                    }
+                else:
+                    print(f"[DEBUG] 未找到任务 {task_id}")
+            else:
+                print(f"[DEBUG] 没有_taskListWidget组件")
+        except Exception as e:
+            print(f"获取任务信息失败: {e}")
+        
+        return {}
+
+    def _save_task_to_database(self, task_id, takes):
+        """保存任务数据到数据库"""
+        try:
+            # 获取任务信息
+            task_info = self._get_task_info(task_id)
+            
+            # 获取当前采集者ID
+            collector_id = self.current_collector.get('id')
+            if not collector_id:
+                print(f"保存任务 {task_id} 到数据库失败: 没有采集者ID")
+                return False
+            
+            saved_count = 0
+            
+            for take_item in takes:
+                # 解析动作脚本为action_config格式
+                notes_list = take_item._take_notes.split('\n') if take_item._take_notes else []
+                action_config = self._parse_actions_to_config(notes_list, take_item._actions, task_info)
+                
+                # 使用英文任务名称
+                task_name_en = self._clean_text(task_info.get('task_name_en', ''))
+                if not task_name_en:
+                    task_name_en = self._clean_text(take_item._take_desc)
+                
+                # 使用场景信息
+                scene_text = self._clean_text(task_info.get('scenarios', ''))
+                if not scene_text:
+                    scene_text = f"Task {task_id}: {task_name_en}"
+                
+                # 保存到数据库（后端会自动生成episode_id），传入业务task_id
+                task_info_id = self.db_controller.save_full_episode(
+                    collector_id=collector_id,
+                    episode_id="",  # 后端自动生成
+                    task_id=str(task_id),
+                    task_name=task_name_en,
+                    init_scene_text=scene_text,
+                    action_config=action_config,
+                    task_status='pending'  # 默认为待审核状态
+                )
+                
+                if task_info_id:
+                    saved_count += 1
+                    # 将任务ID保存到TakeItem中，用于后续状态更新
+                    take_item._task_id = task_info_id
+                    print(f"成功保存任务 {task_id} episode {task_info_id} 到数据库 (ID: {task_info_id})")
+                else:
+                    print(f"保存任务 {task_id} 到数据库失败")
+            
+            return saved_count > 0
+            
+        except Exception as e:
+            print(f"保存任务 {task_id} 到数据库失败: {e}")
+            return False
+
+    def _clean_action_text(self, action_text):
+        """清理动作文本，移除括号内的技能标识"""
+        import re
+        # 移除括号内的技能标识，如 (Fold), (Pick) 等
+        cleaned_text = re.sub(r'\([^)]+\)', '', action_text)
+        # 清理多余的空格和标点
+        cleaned_text = cleaned_text.strip()
+        return cleaned_text
+
+    def _clean_text(self, text):
+        """清理文本，移除换行符和多余空格"""
+        if not text:
+            return ""
+        return text.replace('\n', ' ').replace('\r', ' ').strip()
+
+    def _parse_actions_to_config(self, notes_text, actions, task_info=None):
+        """将动作脚本解析为action_config格式"""
+        action_config = []
+        
+        # 优先使用英文动作文本
+        english_actions = ""
+        if task_info and task_info.get('action_text_en'):
+            english_actions = task_info.get('action_text_en')
+        
+        # 如果没有英文动作文本，直接返回空配置
+        if not english_actions:
+            print("警告: 没有英文动作文本，跳过动作配置生成")
+            return action_config
+        
+        if actions:
+            # 如果有具体的动作信息（包含帧数据），使用英文动作文本
+            for i, action in enumerate(actions):
+                # 从英文动作文本中获取对应的动作
+                action_text = self._get_english_action_by_index(english_actions, i)
+                if not action_text:
+                    # 如果没有找到对应的英文动作，跳过这个动作
+                    print(f"警告: 没有找到第{i+1}个动作的英文文本，跳过")
+                    continue
+                
+                # 提取技能
+                skill = self._extract_skill_from_action(action_text)
+                # 清理动作文本，移除括号内的技能标识
+                cleaned_action_text = self._clean_action_text(action_text)
+                
+                action_config.append({
+                    "start_frame": action.start_frame,
+                    "end_frame": action.end_frame,
+                    "action_text": self._clean_text(cleaned_action_text),
+                    "skill": skill
+                })
+        else:
+            # 如果没有具体动作信息，从英文动作文本解析
+            source_text = english_actions
+            
+            if source_text:
+                # 处理动作文本，支持多种分隔符
+                lines = []
+                if isinstance(source_text, str):
+                    # 检查是否是Python列表格式的字符串
+                    if source_text.strip().startswith('[') and source_text.strip().endswith(']'):
+                        # 解析Python列表格式的字符串
+                        try:
+                            import ast
+                            parsed_list = ast.literal_eval(source_text)
+                            if isinstance(parsed_list, list):
+                                lines = parsed_list
+                            else:
+                                lines = source_text.split('\n')
+                        except:
+                            # 如果解析失败，按换行符分割
+                            lines = source_text.split('\n')
+                    else:
+                        # 如果是普通字符串，按换行符分割
+                        lines = source_text.split('\n')
+                elif isinstance(source_text, list):
+                    # 如果是列表，直接使用
+                    lines = source_text
+                
+                current_frame = 0
+                frame_duration = 100  # 默认每个动作100帧
+                
+                for line in lines:
+                    if isinstance(line, str):
+                        line = line.strip()
+                    else:
+                        line = str(line).strip()
+                    
+                    if line:
+                        # 移除序号前缀
+                        if '. ' in line:
+                            action_text = line[line.find('. ') + 2:]
+                        else:
+                            action_text = line
+                        
+                        # 清理动作文本
+                        action_text = self._clean_text(action_text)
+                        
+                        if action_text:  # 确保动作文本不为空
+                            # 提取技能
+                            skill = self._extract_skill_from_action(action_text)
+                            # 清理动作文本，移除括号内的技能标识
+                            cleaned_action_text = self._clean_action_text(action_text)
+                            
+                            action_config.append({
+                                "start_frame": current_frame,
+                                "end_frame": current_frame + frame_duration,
+                                "action_text": cleaned_action_text,
+                                "skill": skill
+                            })
+                            current_frame += frame_duration
+        
+        return action_config
+
+    def _get_english_action_by_index(self, english_actions, index):
+        """根据索引获取英文动作文本"""
+        if not english_actions:
+            return None
+        
+        try:
+            # 解析英文动作文本
+            lines = []
+            if isinstance(english_actions, str):
+                # 检查是否是Python列表格式的字符串
+                if english_actions.strip().startswith('[') and english_actions.strip().endswith(']'):
+                    import ast
+                    parsed_list = ast.literal_eval(english_actions)
+                    if isinstance(parsed_list, list):
+                        lines = parsed_list
+                    else:
+                        lines = english_actions.split('\n')
+                else:
+                    lines = english_actions.split('\n')
+            elif isinstance(english_actions, list):
+                lines = english_actions
+            
+            # 根据索引获取对应的动作
+            if 0 <= index < len(lines):
+                action_text = lines[index]
+                if isinstance(action_text, str):
+                    action_text = action_text.strip()
+                    # 移除序号前缀
+                    if '. ' in action_text:
+                        action_text = action_text[action_text.find('. ') + 2:]
+                    return action_text
+                else:
+                    return str(action_text).strip()
+            
+            return None
+        except Exception as e:
+            print(f"解析英文动作文本失败: {e}")
+            return None
+
+    def _get_english_action_text(self, chinese_action, english_actions):
+        """根据中文动作获取对应的英文动作文本"""
+        if not english_actions:
+            return ""
+        
+        # 简单的映射逻辑，可以根据需要改进
+        # 这里可以根据动作的相似性进行匹配
+        english_lines = english_actions.split('\n')
+        chinese_lines = []
+        
+        # 如果有中文动作文本，也进行分割
+        if hasattr(self, '_current_task') and self._current_task:
+            chinese_text = self._current_task.action_text_cn or ""
+            chinese_lines = chinese_text.split('\n')
+        
+        # 尝试找到对应的英文动作
+        for i, chinese_line in enumerate(chinese_lines):
+            if chinese_action in chinese_line and i < len(english_lines):
+                return english_lines[i].strip()
+        
+        return ""
+
+    def _extract_skill_from_action(self, action_text):
+        """从动作文本中提取技能类型"""
+        import re
+        
+        # 首先检查是否有括号内的技能标识，如 (Fold), (Pick), (Push) 等
+        skill_match = re.search(r'\(([^)]+)\)', action_text)
+        if skill_match:
+            skill = skill_match.group(1).strip()
+            # 清理技能名称，移除多余的空格和标点
+            skill = skill.replace('.', '').strip()
+            return skill
+        
+        # 如果没有括号内的技能标识，使用关键词匹配
+        action_text_lower = action_text.lower()
+        
+        # 支持中英文关键词判断技能类型
+        if any(keyword in action_text for keyword in ["取", "抓", "拿"]) or \
+           any(keyword in action_text_lower for keyword in ["pick", "grab", "take", "retrieve"]):
+            return "Pick"
+        elif any(keyword in action_text for keyword in ["放", "置"]) or \
+             any(keyword in action_text_lower for keyword in ["place", "put", "set"]):
+            return "Place"
+        elif "推" in action_text or any(keyword in action_text_lower for keyword in ["push"]):
+            return "Push"
+        elif "拉" in action_text or any(keyword in action_text_lower for keyword in ["pull"]):
+            return "Pull"
+        elif "倒" in action_text or any(keyword in action_text_lower for keyword in ["pour", "dump"]):
+            return "Pour"
+        elif "刷" in action_text or any(keyword in action_text_lower for keyword in ["brush", "scrub"]):
+            return "Brush"
+        elif "摇" in action_text or any(keyword in action_text_lower for keyword in ["shake"]):
+            return "Shake"
+        elif "握" in action_text or any(keyword in action_text_lower for keyword in ["hold", "grip"]):
+            return "Hold"
+        elif any(keyword in action_text_lower for keyword in ["fold", "bend"]):
+            return "Fold"
+        else:
+            return "Manipulate"  # 默认技能类型
 
     def merge_motion_file(self):
         merge_list = {}
@@ -706,6 +1208,18 @@ class MainWindow(QMainWindow):
 
         self._view_menu = self.menuBar().addMenu(self.tr("&View"))
 
+        # 账号菜单（登录采集者）
+        self._account_menu = self.menuBar().addMenu(self.tr("&Account"))
+        self._login_act = QAction(self.tr("Login Collector"), self,
+                statusTip=self.tr("Login or register a collector"), triggered=self.login_collector)
+        self._account_menu.addAction(self._login_act)
+        
+        # 自动保存到数据库选项
+        self._auto_save_act = QAction(self.tr("Auto Save to Database"), self,
+                statusTip=self.tr("Automatically save recordings to database"), 
+                checkable=True, checked=True, triggered=self.toggle_auto_save)
+        self._account_menu.addAction(self._auto_save_act)
+
         self._publish_menu = self.menuBar().addMenu(self.tr("&Publish"))
         self._publish_menu.addAction(self._collect_file_act)
         self._publish_menu.addAction(self._merge_file_act)
@@ -717,6 +1231,122 @@ class MainWindow(QMainWindow):
         # self._help_menu.addAction(self._chs_act)
         # self._help_menu.addAction(self._eng_act)
         self._help_menu.addAction(self._about_act)
+        
+    def toggle_auto_save(self):
+        """切换自动保存到数据库功能"""
+        self.auto_save_to_db = self._auto_save_act.isChecked()
+        status = "开启" if self.auto_save_to_db else "关闭"
+        self.statusBar().showMessage(f"自动保存到数据库: {status}", 2000)
+        print(f"自动保存到数据库: {status}")
+        
+    def login_collector(self):
+        """登录/注册采集者对话流程"""
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLineEdit, QLabel
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle(self.tr("登录采集者"))
+        layout = QVBoxLayout(dlg)
+
+        # 已有采集者选择
+        layout.addWidget(QLabel(self.tr("选择已有采集者:")))
+        cmb = QComboBox(dlg)
+        collectors = self.db_controller.list_collectors()
+        cmb.addItem(self.tr("-- 请选择 --"), None)
+        for c in collectors:
+            display = f"[{c.get('collector_id','')}] {c.get('collector_name','')}"
+            cmb.addItem(display, c)
+        layout.addWidget(cmb)
+
+        # 注册新采集者
+        layout.addWidget(QLabel(self.tr("或注册新采集者:")))
+        edt_org = QLineEdit(dlg); edt_org.setPlaceholderText(self.tr("组织"))
+        edt_cid = QLineEdit(dlg); edt_cid.setPlaceholderText(self.tr("采集者ID"))
+        edt_name = QLineEdit(dlg); edt_name.setPlaceholderText(self.tr("姓名"))
+        edt_target = QLineEdit(dlg); edt_target.setPlaceholderText(self.tr("目标客户(可选)"))
+        layout.addWidget(edt_org)
+        layout.addWidget(edt_cid)
+        layout.addWidget(edt_name)
+        layout.addWidget(edt_target)
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton(self.tr("确定"), dlg)
+        btn_cancel = QPushButton(self.tr("取消"), dlg)
+        btns.addWidget(btn_ok); btns.addWidget(btn_cancel)
+        layout.addLayout(btns)
+
+        def on_ok():
+            # 优先已有选择
+            data = cmb.currentData()
+            if data:
+                self.set_current_collector(data)
+                dlg.accept()
+                return
+            # 其次注册新用户
+            if edt_org.text().strip() and edt_cid.text().strip() and edt_name.text().strip():
+                new_id = self.db_controller.upsert_collector({
+                    "collector_organization": edt_org.text().strip(),
+                    "collector_id": edt_cid.text().strip(),
+                    "collector_name": edt_name.text().strip(),
+                    "target_customer": edt_target.text().strip() or None,
+                })
+                data = self.db_controller.get_collector(new_id)
+                self.set_current_collector(data)
+                dlg.accept()
+            else:
+                QMessageBox.warning(self, self.tr("提示"), self.tr("请选择采集者或填写完整的注册信息"))
+
+        btn_ok.clicked.connect(on_ok)
+        btn_cancel.clicked.connect(dlg.reject)
+
+        dlg.exec()
+
+    def set_current_collector(self, collector: dict):
+        """设置当前采集者并持久化到QSettings"""
+        self.current_collector = collector
+        # 状态栏显示
+        name = collector.get('collector_name','') if collector else self.tr("未登录采集者")
+        cid = collector.get('collector_id','') if collector else ''
+        self._collector_label.setText(self.tr("采集者: ") + f"{name}({cid})")
+
+        # 保存到设置
+        try:
+            self._appconfig._settings.setValue('CurrentCollectorJson', json.dumps(collector, ensure_ascii=False))
+        except Exception:
+            pass
+
+        # 依据当前状态重建账号菜单
+        self._rebuild_account_menu()
+
+    def _rebuild_account_menu(self):
+        """根据登录状态重建 Account 菜单"""
+        try:
+            self._account_menu.clear()
+        except Exception:
+            return
+        if self.current_collector:
+            # 显示信息与登出
+            info_text = self.tr("当前采集者: ") + f"{self.current_collector.get('collector_name','')} ({self.current_collector.get('collector_id','')})"
+            info_act = QAction(info_text, self)
+            info_act.setEnabled(False)
+            self._account_menu.addAction(info_act)
+
+            logout_act = QAction(self.tr("Logout"), self,
+                                 statusTip=self.tr("Logout current collector"), triggered=self._logout_collector)
+            self._account_menu.addAction(logout_act)
+        else:
+            login_act = QAction(self.tr("Login Collector"), self,
+                                statusTip=self.tr("Login or register a collector"), triggered=self.login_collector)
+            self._account_menu.addAction(login_act)
+
+    def _logout_collector(self):
+        """登出采集者"""
+        self.current_collector = None
+        try:
+            self._appconfig._settings.remove('CurrentCollectorJson')
+        except Exception:
+            pass
+        self._collector_label.setText(self.tr("未登录采集者"))
+        self._rebuild_account_menu()
 
     def create_tool_bars(self):
         self._file_tool_bar = self.addToolBar(self.tr("File"))
@@ -734,18 +1364,20 @@ class MainWindow(QMainWindow):
 
     def create_status_bar(self):
         self.statusBar().showMessage("就绪...", 2000)
+        # 显示当前采集者
+        self._collector_label = QLabel(self.tr("未登录采集者"))
+        self.statusBar().addPermanentWidget(self._collector_label)
 
     def create_takelist(self, splitter):
         # 创建 QTableWidget
         takelistWidget = QTableWidget(splitter)
-        # 设置列名
-        header_labels = ["拍摄名称", 
-                         "描述", 
-                         "备注", 
+        # 设置列名 - 优化后的列名
+        header_labels = ["任务ID", 
+                         "任务名称", 
                          "开始时间", 
                          "结束时间", 
-                         "持续时间", 
-                         "评分"]
+                         "持续时间",
+                         "状态"]
         takelistWidget.setColumnCount(len(header_labels))
         takelistWidget.setHorizontalHeaderLabels(header_labels)
         # 设置表头字体颜色为黑色
@@ -759,6 +1391,14 @@ class MainWindow(QMainWindow):
         # QTableWidget右击
         takelistWidget.setContextMenuPolicy(Qt.CustomContextMenu)
         takelistWidget.customContextMenuRequested.connect(self.showContextMenu)
+
+        # 设置列宽
+        takelistWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 任务ID
+        takelistWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)           # 任务名称
+        takelistWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 开始时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 结束时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 持续时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)   # 状态
 
         return takelistWidget
     
@@ -803,8 +1443,11 @@ class MainWindow(QMainWindow):
             for row in rows:
                 self._table_takelist.removeRow(row)
                 shot = self._takelist.pop(row)
-                self._dict_takename.pop(shot._take_name)
-                self.delete_device_take(shot._take_name)
+                # 仅当存在有效take_name时再同步字典与设备
+                if getattr(shot, "_take_name", None):
+                    if shot._take_name in self._dict_takename:
+                        self._dict_takename.pop(shot._take_name)
+                        self.delete_device_take(shot._take_name)
 
             # 更新场景切换表格
             self._dict_shotname.shot_list_group_by(self._takelist)
@@ -842,6 +1485,16 @@ class MainWindow(QMainWindow):
         gridLayout = QGridLayout()
 
         lblShotName = QLabel("任务ID:")
+        lblShotName.setStyleSheet("""
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                color: #FFFFFF;
+                background-color: transparent;
+                padding: 4px 0px;
+            }
+        """)
         gridLayout.addWidget(lblShotName, 0, 0)
         self._edt_shotName = QtWidgetFactory.create_QLineEdit(app_const.Defualt_Edit_Shot_Name)
         self._edt_shotName.setMaxLength(app_const.Max_Shot_Name)
@@ -853,32 +1506,138 @@ class MainWindow(QMainWindow):
         self._edt_shotName.setValidator(validator_half)
         self._edt_shotName.textChanged.connect(self.edt_shotName_changed)
         
+        # 设置任务ID输入框的字体样式
+        self._edt_shotName.setStyleSheet("""
+            QLineEdit {
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                color: #FFFFFF;
+                background-color: #2A2A2A;
+                border: 2px solid #333333;
+                border-radius: 4px;
+                padding: 8px 12px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #0078D4;
+                background-color: #333333;
+            }
+            QLineEdit:hover {
+                border: 2px solid #555555;
+            }
+            QLineEdit[readOnly="true"] {
+                background-color: #1A1A1A;
+                color: #CCCCCC;
+                border: 2px solid #444444;
+            }
+        """)
+        
         gridLayout.addWidget(self._edt_shotName, 0, 1)
 
         lblDesc = QLabel("任务名称:")
+        lblDesc.setStyleSheet("""
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                color: #FFFFFF;
+                background-color: transparent;
+                padding: 4px 0px;
+            }
+        """)
         gridLayout.addWidget(lblDesc, 1, 0)
         #self.tr("Record description")
         self._edt_desc = QtWidgetFactory.create_QLineEdit('')
         self._edt_desc.setReadOnly(True)  # 设置为只读
+        
+        # 设置任务名称输入框的字体样式
+        self._edt_desc.setStyleSheet("""
+            QLineEdit {
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                color: #FFFFFF;
+                background-color: #2A2A2A;
+                border: 2px solid #333333;
+                border-radius: 4px;
+                padding: 8px 12px;
+            }
+            QLineEdit:focus {
+                border: 2px solid #0078D4;
+                background-color: #333333;
+            }
+            QLineEdit:hover {
+                border: 2px solid #555555;
+            }
+            QLineEdit[readOnly="true"] {
+                background-color: #1A1A1A;
+                color: #CCCCCC;
+                border: 2px solid #444444;
+            }
+        """)
+        
         gridLayout.addWidget(self._edt_desc, 1, 1)
 
         lblNotes = QLabel("动作脚本:")
+        lblNotes.setStyleSheet("""
+            QLabel {
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                color: #FFFFFF;
+                background-color: transparent;
+                padding: 4px 0px;
+            }
+        """)
         gridLayout.addWidget(lblNotes, 2, 0)
         #self.tr("Record script")
         self._edt_notes = QListWidget()
         # QListWidget没有setReadOnly方法，通过样式和属性控制只读
-        self._edt_notes.setStyleSheet(app_css.SheetStyle_ListWidget)
+        
+        # 设置动作脚本列表的字体样式
+        self._edt_notes.setStyleSheet("""
+            QListWidget {
+                background-color: #1A1A1A;
+                color: #CCCCCC;
+                border: 2px solid #333333;
+                border-radius: 4px;
+                font-family: 'Microsoft YaHei';
+                font-size: 14pt;
+                font-weight: bold;
+                padding: 8px;
+                outline: none;
+            }
+
+            QListWidget::item {
+                padding: 12px 16px;
+                border-bottom: 1px solid #333333;
+                background-color: transparent;
+                font-size: 14pt;
+                font-weight: bold;
+            }
+
+            QListWidget::item:hover {
+                background-color: #2A2A2A;
+            }
+
+            QListWidget::item:selected {
+                background-color: #0078D4;
+                color: #FFFFFF;
+            }
+
+            QListWidget::item:selected:hover {
+                background-color: #005A9E;
+            }
+
+            QListWidget::item:focus {
+                outline: none;
+            }
+        """)
+        
         gridLayout.addWidget(self._edt_notes, 2, 1)
         gridLayout.setRowStretch(2, 3)
 
         vboxLayout = QVBoxLayout()
-
-        self._lbl_takename = QLabel()
-        self._lbl_takename.setStyleSheet(app_css.SheetStyle_Label)
-        self._lbl_takename.setFixedWidth(RecordButtonWidth)
-        self._lbl_takename.setFixedHeight(RecordButtonHeight)
-        self._lbl_takename.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
-        self.updateLabelTakeName()
 
         self._lbl_timecode = QLabel('00:00:00:00')
         self._lbl_timecode.setStyleSheet(app_css.SheetStyle_Label)
@@ -889,10 +1648,68 @@ class MainWindow(QMainWindow):
         # Record button
         self._btn_record = QtWidgetFactory.create_QPushButton("录制", app_css.SheetStyle_Button_Record, self.record_clicked)
         self._btn_record.setFixedSize(RecordButtonWidth, RecordButtonHeight)
+        self._btn_record.setEnabled(False)  # 初始状态禁用
 
-        vboxLayout.addWidget(self._lbl_takename)
         vboxLayout.addWidget(self._lbl_timecode)
         vboxLayout.addWidget(self._btn_record)
+
+        # 添加录制提示框
+        self._lbl_recording_tips = QLabel()
+        self._lbl_recording_tips.setStyleSheet("""
+            QLabel {
+                font-size: 12px;
+                color: #cccccc;
+                background-color: #2a2a2a;
+                border: 1px solid #444444;
+                border-radius: 5px;
+                padding: 10px;
+                font-family: 'Microsoft YaHei';
+                line-height: 1.4;
+            }
+        """)
+        self._lbl_recording_tips.setFixedWidth(RecordButtonWidth)
+        self._lbl_recording_tips.setWordWrap(True)  # 允许换行
+        self._lbl_recording_tips.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        
+        # 设置提示内容
+        tips_content = """1. 点击录制会有三秒的准备时间。
+2. 左侧动作列表高亮后再进行操作。
+3. 完成一个动作后稍作停顿，等待下个动作列表高亮后操作。
+4.完成所有动作后，会自动结束录制。"""
+        self._lbl_recording_tips.setText(tips_content)
+        
+        vboxLayout.addWidget(self._lbl_recording_tips)
+
+        # 添加提示编辑器框
+        self._edt_tips = QTextEdit()
+        self._edt_tips.setReadOnly(True)  # 设置为只读
+        self._edt_tips.setFixedWidth(RecordButtonWidth)
+        self._edt_tips.setFixedHeight(120)  # 设置较大的高度
+        self._edt_tips.setStyleSheet(app_css.SheetStyle_Label)
+        self._edt_tips.setPlainText("就绪")  # 设置默认文本
+        self._edt_tips.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # 需要时显示滚动条
+        self._edt_tips.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        vboxLayout.addWidget(self._edt_tips)
+
+        # 添加倒计时数字标签
+        self._lbl_countdown = QLabel("")
+        self._lbl_countdown.setStyleSheet("""
+            QLabel {
+                font-size: 48px;
+                font-weight: bold;
+                color: #ff4444;
+                background-color: #404040;
+                border: 2px solid #333333;
+                border-radius: 10px;
+                padding: 10px;
+                font-family: 'Microsoft YaHei';
+            }
+        """)
+        self._lbl_countdown.setFixedWidth(RecordButtonWidth)
+        self._lbl_countdown.setFixedHeight(80)
+        self._lbl_countdown.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        self._lbl_countdown.hide()  # 默认隐藏
+        vboxLayout.addWidget(self._lbl_countdown)
 
         #设置按钮间隔
         vboxLayout.setSpacing(5)
@@ -981,6 +1798,9 @@ class MainWindow(QMainWindow):
         # 解析动作脚本
         self.parse_action_script(task.action_text_cn or "")
         
+        # 启用录制按钮
+        self._btn_record.setEnabled(True)
+        
         self.updateLabelTakeName()
 
     def get_notes_text(self):
@@ -991,7 +1811,11 @@ class MainWindow(QMainWindow):
             # 移除序号前缀 (例如 "1. " -> "")
             action_text = item_text[item_text.find('. ') + 2:] if '. ' in item_text else item_text
             items.append(action_text)
-        return '\n'.join(items)
+        return items  # 返回列表而不是字符串
+
+    def _get_next_episode_id(self):
+        """生成全局唯一的episode ID，避免与后端唯一约束冲突"""
+        return uuid4().hex
 
     def parse_action_script(self, action_text_cn):
         """解析动作脚本，将换行符分隔的动作文本转换为列表显示"""
@@ -1165,10 +1989,23 @@ class MainWindow(QMainWindow):
 
     # 录制开始/停止
     def record_clicked(self):
+        # 检查是否有选择任务
+        if not self._edt_shotName.text().strip():
+            QMessageBox.warning(self, "提示", "请先选择一个任务")
+            return
+            
         if self._recording:
             #录制中
-            self.mod_peel.command('stop', self._lbl_takename.text())
-            self._lbl_takename.setStyleSheet(app_css.SheetStyle_Label)
+            # 停止时仅依赖记录ID：取最后一条记录的record_id
+            if not self._takelist:
+                return
+            last_take = self._takelist[-1]
+            stop_id = last_take._record_id if hasattr(last_take, "_record_id") else None
+            if stop_id is None:
+                # 兜底用行号作为ID
+                stop_id = len(self._takelist)
+            self.mod_peel.command('stop', str(stop_id))
+            # 已移除标题标签，无需设置样式
             self._btn_record.setText("录制")
             self._record_secord = 0
             self._recording = False
@@ -1195,92 +2032,41 @@ class MainWindow(QMainWindow):
 
             self._device_add.setEnabled(True)
             self._device_del.setEnabled(True)
+            self._btn_record.setEnabled(True)  # 重新启用录制按钮
 
             self.statusBar().showMessage("就绪...", 2000)
+            self.update_tips("录制完成", 3000)  # 3秒后恢复默认
             self.highLightNoteInfo(-1)
             self.save(True)
         else:
-            #未录制
-            shot_name = self._edt_shotName.text()
-            take_no = 1  # 固定为1，不再使用拍摄次数
-            take_name = self._lbl_takename.text()
-            if take_name in self._dict_takename:
-                msg = self.tr(" has existed. Please modify shot name or take no.")
-                QMessageBox.warning(self, AppName, take_name + msg)
-                return
-
-            self._dict_takename[take_name] = ''
-            
-            # for unreal
-            self.mod_peel.command('shotName', shot_name)
-            # common command
-            self.mod_peel.command('takeNumber', take_no)
-            self.mod_peel.command('record', take_name)
-            self._lbl_takename.setStyleSheet(app_css.SheetStyle_Label_Shot)
-            self._btn_record.setText('00:00:00')
-            
-            self._recording = True
-
-            strDesc = self._edt_desc.text()
-            strNotes = self.get_notes_text()
-            takeItem = TakeItem(shot_name, 
-                                take_no, 
-                                take_name, 
-                                strDesc, 
-                                strNotes)
-            
-            self._takelist.append(takeItem)
-
-            row_count = len(self._takelist)
-            self._table_takelist.setRowCount(row_count)
-            newRow = row_count - 1
-            #Take名
-            twItem = QTableWidgetItem(takeItem._take_name)
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(newRow, 0, twItem)
-
-            #录制描述
-            twItem = QTableWidgetItem(takeItem._take_desc)
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(newRow, 1, twItem)
-
-            #录制批注
-            twItem = QTableWidgetItem(takeItem._take_notes)
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(newRow, 2, twItem)
-
-            #录制开始时间
-            str_start_time = takeItem._start_time.strftime('%H:%M:%S')
-            twItem = QTableWidgetItem(str_start_time)
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(newRow, 3, twItem)
-
-            #评分
-            self.cmbEval = QtWidgetFactory.create_QComboBox(app_const.ComboBox_Eval_Default, takeItem._eval)
-            self.cmbEval.currentIndexChanged.connect(self.onComboBoxIndexChanged)
-            self._table_takelist.setCellWidget(newRow, 6, self.cmbEval)
-            self._table_takelist.scrollToBottom()
-            self.statusBar().showMessage("录制中...", 0)
-            #self._edt_notes.setReadOnly(True)
-            #self.highLightNoteInfo()
-
-            self._device_add.setEnabled(False)
-            self._device_del.setEnabled(False)
-
-            self._record_secord = 0
+            #未录制 - 先开始倒计时
+            self.start_countdown(3, "准备开始录制")
+            # 禁用录制按钮防止重复点击
+            self._btn_record.setEnabled(False)
             self._time_record.start(1000)
-            # 更新索引
+            # 更新索引 - 使用当前任务信息
+            shot_name = self._edt_shotName.text()
+            take_no = 1
             self._dict_shotname.add_shot_with_take(shot_name, take_no)
             self.update_shotlist()
         self._will_save = True
 
     def UpdateActionInfo(self, row, startFrame, endFrame):
+        print(f"[DEBUG] UpdateActionInfo: row={row}, startFrame={startFrame}, endFrame={endFrame}")
+        actionName = "未知动作"  # 默认动作名称
+        
         if 0 <= row < self._edt_notes.count():
             item_text = self._edt_notes.item(row).text()
             # 移除序号前缀 (例如 "1. " -> "")
             actionName = item_text[item_text.find('. ') + 2:] if '. ' in item_text else item_text
-            actionInfo = ActionInfo(actionName, startFrame, endFrame)
+        
+        actionInfo = ActionInfo(actionName, startFrame, endFrame)
+        
+        # 检查是否有正在录制的take
+        if self._takelist and len(self._takelist) > 0:
             self._takelist[-1].add_action(actionInfo)
+        else:
+            print(f"警告: 没有正在录制的take，忽略动作回调 (row={row})")
 
     # 根据shot name更新ShotList的序号列
     def update_shotlist(self):
@@ -1319,19 +2105,239 @@ class MainWindow(QMainWindow):
 
         # self._table_takelist.setItem(lastRow, 5, QTableWidgetItem(str(take_last._due.seconds) + ' sec'))
 
-    def updateLabelTakeName(self):
-        # 使用任务ID和任务名称生成显示名称
-        task_id = self._edt_shotName.text()
-        task_name = self._edt_desc.text()
-        if task_id and task_name:
-            result = f"{task_id}_{task_name}"
-        elif task_id:
-            result = task_id
-        elif task_name:
-            result = task_name
+    def update_tips(self, message, duration=0):
+        """更新提示信息
+        
+        Args:
+            message: 提示信息文本
+            duration: 显示时长（毫秒），0表示永久显示
+        """
+        self._edt_tips.setPlainText(message)
+        # 滚动到底部显示最新内容
+        self._edt_tips.moveCursor(QTextCursor.End)
+        if duration > 0:
+            # 使用QTimer在指定时间后恢复默认提示
+            QTimer.singleShot(duration, lambda: self._edt_tips.setPlainText("就绪"))
+
+    def append_tips(self, message):
+        """追加提示信息到现有内容
+        
+        Args:
+            message: 要追加的提示信息文本
+        """
+        current_text = self._edt_tips.toPlainText()
+        if current_text == "就绪":
+            self._edt_tips.setPlainText(message)
         else:
-            result = "未选择任务"
-        self._lbl_takename.setText(result)
+            self._edt_tips.append(message)
+        # 滚动到底部显示最新内容
+        self._edt_tips.moveCursor(QTextCursor.End)
+
+    def clear_tips(self):
+        """清除提示信息，恢复默认状态"""
+        self._edt_tips.setPlainText("就绪")
+
+    def start_countdown(self, seconds=3, message="准备开始录制", auto_stop=False):
+        """开始倒计时
+        
+        Args:
+            seconds: 倒计时秒数，默认3秒
+            message: 倒计时期间显示的消息
+            auto_stop: 是否为自动停止模式
+        """
+        self._countdown_seconds = seconds
+        self._countdown_is_auto_stop = auto_stop
+        self._countdown_timer = QTimer()
+        self._countdown_timer.timeout.connect(self._update_countdown)
+        
+        # 显示倒计时标签和提示信息
+        self._lbl_countdown.show()
+        self.update_tips(f"{message}\n倒计时: {seconds}秒")
+        self._lbl_countdown.setText(str(seconds))
+        
+        # 开始倒计时
+        self._countdown_timer.start(1000)  # 每秒更新一次
+
+    def _update_countdown(self):
+        """更新倒计时显示"""
+        self._countdown_seconds -= 1
+        
+        if self._countdown_seconds > 0:
+            # 更新倒计时数字
+            self._lbl_countdown.setText(str(self._countdown_seconds))
+            # 更新提示信息
+            if hasattr(self, '_countdown_is_auto_stop') and self._countdown_is_auto_stop:
+                self.update_tips(f"录制即将结束\n倒计时: {self._countdown_seconds}秒")
+            else:
+                self.update_tips(f"准备开始录制\n倒计时: {self._countdown_seconds}秒")
+        else:
+            # 倒计时结束
+            self._countdown_timer.stop()
+            self._lbl_countdown.hide()
+            if hasattr(self, '_countdown_is_auto_stop') and self._countdown_is_auto_stop:
+                self.update_tips("录制完成！")
+                # 触发自动停止录制
+                self._on_auto_stop_countdown_finished()
+            else:
+                self.update_tips("录制开始！")
+                # 这里可以触发实际的录制开始逻辑
+                self._on_countdown_finished()
+
+    def _on_countdown_finished(self):
+        """倒计时结束后的回调，开始实际录制"""
+        # 重新启用录制按钮
+        self._btn_record.setEnabled(True)
+        
+        # 开始实际录制
+        shot_name = self._edt_shotName.text()
+        take_no = 1  # 固定为1，不再使用拍摄次数
+        # 仅使用录制ID，不依赖名称
+        record_id = len(self._takelist) + 1
+        # for unreal（如仍需）
+        self.mod_peel.command('shotName', shot_name)
+        # common command
+        self.mod_peel.command('takeNumber', take_no)
+        self.mod_peel.command('record', str(record_id))
+        # 不再显示标题标签，保持原有样式调用安全
+        self._btn_record.setText('00:00:00')
+        
+        self._recording = True
+
+        # 倒计时结束后立即高亮第一条脚本
+        try:
+            if hasattr(self, '_edt_notes') and self._edt_notes.count() > 0:
+                self.highLightNoteInfo(0)
+        except Exception:
+            pass
+
+        strDesc = self._edt_desc.text()
+        strNotes = '\n'.join(self.get_notes_text())
+        takeItem = TakeItem(shot_name, 
+                            take_no, 
+                            "",
+                            strDesc, 
+                            strNotes,
+                            record_id=record_id)
+        
+        self._takelist.append(takeItem)
+
+        row_count = len(self._takelist)
+        self._table_takelist.setRowCount(row_count)
+        newRow = row_count - 1
+        
+        # 使用updateTakeRow方法统一更新
+        self.updateTakeRow(newRow, takeItem)
+        self._table_takelist.scrollToBottom()
+        self.statusBar().showMessage("录制中...", 0)
+        self.update_tips("正在录制中...")  # 永久显示直到停止
+        #self._edt_notes.setReadOnly(True)
+
+    def auto_stop_recording(self):
+        """自动停止录制，由设备回调触发"""
+        if not self._recording:
+            return
+            
+        print("触发自动停止录制")
+        
+        # 更新提示信息
+        self.update_tips("录制完成，即将结束...")
+        
+        # 开始3秒倒计时
+        self.start_countdown(3, "录制即将结束", auto_stop=True)
+        
+    def _on_auto_stop_countdown_finished(self):
+        """自动停止倒计时结束后的回调"""
+        if not self._recording:
+            return
+            
+        print("自动停止倒计时结束，执行停止录制")
+        
+        # 执行停止录制逻辑
+        if not self._takelist:
+            return
+            
+        last_take = self._takelist[-1]
+        stop_id = last_take._record_id if hasattr(last_take, "_record_id") else None
+        if stop_id is None:
+            # 兜底用行号作为ID
+            stop_id = len(self._takelist)
+            
+        self.mod_peel.command('stop', str(stop_id))
+        
+        # 更新UI状态
+        self._btn_record.setText("录制")
+        self._record_secord = 0
+        self._recording = False
+
+        self._time_record.stop()
+
+        take_last = self._takelist[-1]
+        take_last._end_time = datetime.now()
+        take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
+
+        row_count = len(self._takelist)
+        lastRow = row_count - 1
+
+        # 使用updateTakeRow方法统一更新
+        self.updateTakeRow(lastRow, take_last)
+        self._table_takelist.scrollToBottom()
+        
+        # 更新提示信息
+        self.update_tips("录制完成！")
+        
+        # 重新启用录制按钮
+        self._btn_record.setEnabled(True)
+        
+        self.statusBar().showMessage("录制完成", 2000)
+        #self.highLightNoteInfo()
+
+        self._device_add.setEnabled(False)
+        self._device_del.setEnabled(False)
+
+        self._record_secord = 0
+        
+        # 自动保存到数据库（如果配置了自动保存）
+        if hasattr(self, 'auto_save_to_db') and self.auto_save_to_db:
+            self._auto_save_current_recording()
+
+    def _auto_save_current_recording(self):
+        """自动保存当前录制到数据库"""
+        try:
+            if not self._takelist:
+                return
+            
+            # 获取最后一个录制的take
+            last_take = self._takelist[-1]
+            task_id = last_take._shot_name
+            
+            # 检查是否有当前采集者
+            if not self.current_collector:
+                print("自动保存失败: 没有登录采集者")
+                return
+            
+            # 保存到数据库
+            success = self._save_task_to_database(task_id, [last_take])
+            if success:
+                print(f"自动保存任务 {task_id} 到数据库成功")
+                self.append_tips(f"任务 {task_id} 已自动保存到数据库")
+            else:
+                print(f"自动保存任务 {task_id} 到数据库失败")
+                self.append_tips(f"任务 {task_id} 自动保存到数据库失败")
+                
+        except Exception as e:
+            print(f"自动保存到数据库失败: {e}")
+
+    def cancel_countdown(self):
+        """取消倒计时"""
+        if hasattr(self, '_countdown_timer') and self._countdown_timer:
+            self._countdown_timer.stop()
+        self._lbl_countdown.hide()
+        self.update_tips("倒计时已取消")
+
+    def updateLabelTakeName(self):
+        # 已移除标题控件，保留逻辑生成名称给内部使用
+        # 不再更新任何标签，函数保留以兼容旧调用
+        return
 
     def record_tick(self):
         # print('recording: ' + datetime.now().strftime('%H:%M:%S'))
@@ -1396,6 +2402,15 @@ class MainWindow(QMainWindow):
             self._deviceTable.setItem(r, 2, twItem)
 
             r += 1
+        
+        # 更新初始设备列表，用于检测修改
+        self.init_device_list = []
+        for d in devices:
+            self.init_device_list.append({
+                'name': d.name,
+                'address': d.address,
+                'status': d.status
+            })
 
     def updateDevice(self, updatedDevice):
         row = 0

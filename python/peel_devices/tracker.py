@@ -48,7 +48,7 @@ class AddTrackerWidget(BaseDeviceWidget):
         self.remotetool_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMTrackerRemoteToolPort", str(defualt_remotetool_port)))
         form_layout.addRow(self.tr("RemoteTool Port"), self.remotetool_port)
 
-        self.listen_ip = QtWidgetFactory.create_QComboBox_IP(settings.value("CMTrackerListenIp", self.tr("--all--")))
+        self.listen_ip = QtWidgetFactory.create_QComboBox_IP_Editable(settings.value("CMTrackerListenIp", self.tr("--all--")))
         form_layout.addRow(self.tr("Listen IP"), self.listen_ip)
 
         self.listen_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMTrackerListenPort", str(default_listener_port)))

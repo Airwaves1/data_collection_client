@@ -18,13 +18,20 @@ def load_json_file(full_path):
     
 def save_json_file(full_path, json_data):
     try:
+        import os
+        # 确保目录存在
+        directory = os.path.dirname(full_path)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory, exist_ok=True)
+            print(f"创建目录: {directory}")
+        
         with QApplication.setOverrideCursor(Qt.WaitCursor):
             json_data = json.dumps(json_data, default=encode_object, ensure_ascii=False, indent=2)
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(json_data)
         return True
     except Exception as e:
-        msg = 'Save file Exception: ' + e
+        msg = f'Save file Exception: {e}'
         mylogger.error(msg)
         return False
     

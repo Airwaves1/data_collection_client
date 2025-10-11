@@ -16,7 +16,7 @@ class ActionInfo:
 
 
 class TakeItem:
-    def __init__(self, shot_name="", take_no=0, take_name="", take_desc="", take_note=""):
+    def __init__(self, shot_name="", take_no=0, take_name="", take_desc="", take_note="", record_id=None):
         # Shot名称
         self._shot_name = shot_name
         # Take No.
@@ -27,6 +27,8 @@ class TakeItem:
         self._take_desc = take_desc
         # 录制批注
         self._take_notes = take_note
+        # 录制ID（仅用于设备交互，不用于显示/导出）
+        self._record_id = record_id
         # 录制开始时间
         self._start_time = datetime.now()
         # 录制结束时间
@@ -35,6 +37,8 @@ class TakeItem:
         self._due = 0
         # 评分
         self._eval= "--"
+        # 任务状态
+        self._task_status = "pending"
         self._actions = []
 
     def add_action(self, action_info):
@@ -51,5 +55,6 @@ class TakeItem:
             "end_time": self._end_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
             "due": str(self._due),
             "eval": self._eval,
+            "task_status": self._task_status,
             "actions":[a.to_dict() for a in self._actions]
         }

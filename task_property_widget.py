@@ -91,11 +91,11 @@ class TaskPropertyPanel(QWidget):
 
         # 标题栏
         self.title_label = QLabel("任务属性")
-        self.title_label.setFont(QFont("Microsoft YaHei", 11, QFont.Bold))
+        self.title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
         self.title_label.setStyleSheet("""
             QLabel {
-                background-color: #808080;
-                color: #0044bb;
+                background-color: #303030;
+                color: #4488dd;
                 padding: 8px 12px;
                 border: none;
                 font-weight: bold;

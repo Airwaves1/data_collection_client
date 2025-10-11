@@ -516,6 +516,22 @@ class DeviceCollection(QtCore.QObject):
                 print("Incomplete device (as_dict): " + d.name)
 
         return data
+    
+    def get_device_config_data(self):
+        """获取设备配置数据（不包含takes）"""
+        data = []
+        for d in self.devices:
+            try:
+                device_dict = d.as_dict()
+                # 移除takes数据
+                if 'takes' in device_dict:
+                    device_dict = device_dict.copy()
+                    del device_dict['takes']
+                data.append((d.device(), device_dict))
+            except NotImplementedError as e:
+                print("Incomplete device (as_dict): " + d.name)
+
+        return data
 
     def unique_name(self, device_name):
         name = device_name

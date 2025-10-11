@@ -2,6 +2,7 @@ from pythonosc import dispatcher, osc_server, udp_client
 from peel_devices import PeelDeviceBase, DownloadThread, FileItem, BaseDeviceWidget
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import Signal
 import threading, socket, struct
 from PySide6.QtCore import QCoreApplication
 import os
@@ -47,7 +48,7 @@ class AddAvatarWidget(BaseDeviceWidget):
         self.remotetool_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMAvatarRemoteToolPort", str(defualt_remotetool_port)))
         form_layout.addRow(self.tr("RemoteTool Port"), self.remotetool_port)
 
-        self.listen_ip = QtWidgetFactory.create_QComboBox_IP(settings.value("CMAvatarListenIp", self.tr("--all--")))
+        self.listen_ip = QtWidgetFactory.create_QComboBox_IP_Editable(settings.value("CMAvatarListenIp", self.tr("--all--")))
         form_layout.addRow(self.tr("Listen IP"), self.listen_ip)
 
         self.listen_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMAvatarListenPort", str(default_listener_port)))
@@ -138,6 +139,9 @@ class AddAvatarWidget(BaseDeviceWidget):
 
 class CMAvatar(PeelDeviceBase):
 
+    # 定义信号
+    auto_stop_requested = Signal()
+
     def __init__(self,
                  name,
                  device_ip,
@@ -175,6 +179,9 @@ class CMAvatar(PeelDeviceBase):
 
         self.dispatcher = dispatcher.Dispatcher()
         self.dispatcher.set_default_handler(self.callback, True)
+        
+        # 连接自动停止信号
+        self.auto_stop_requested.connect(self._on_auto_stop_requested)
 
         # self.start_services()
 
@@ -339,11 +346,59 @@ class CMAvatar(PeelDeviceBase):
                 self.push_state()
 
         if command == common.cmd_rep_record_stage:
+            # 只有在录制状态下才处理动作回调
+            if self.state != "RECORDING":
+                print(f"忽略动作回调: 当前状态为 {self.state}，非录制状态")
+                return
+                
             stage = args[0]
             startFrame = args[1]
             endFrame = args[2]
-            self.HighLightNotes(stage)
+            print(f"[DEBUG] CMAvatar动作回调: stage={stage}, startFrame={startFrame}, endFrame={endFrame}")
+            # 当前stage完成后，将高亮切换到下一条（若存在）
+            try:
+                next_stage = int(stage) + 1
+                self.HighLightNotes(next_stage)
+            except Exception:
+                self.HighLightNotes(stage)
             self.UpdateActionInfo(stage, startFrame, endFrame)
+            
+            # 检查是否是最后一个动作，如果是则触发自动停止
+            self.check_and_auto_stop(stage)
+
+    def check_and_auto_stop(self, stage):
+        """检查是否是最后一个动作，如果是则触发自动停止"""
+        try:
+            # 通过cmd模块获取主窗口的动作脚本数量
+            from PeelApp import cmd
+            main_wnd = cmd.g_mainWnd
+            
+            if main_wnd and hasattr(main_wnd, '_edt_notes'):
+                total_actions = main_wnd._edt_notes.count()
+                # 如果当前动作是最后一个（索引从0开始，所以stage == total_actions - 1）
+                if total_actions > 0 and stage == total_actions - 1:
+                    print(f"检测到最后一个动作完成 (stage={stage}, total={total_actions})，触发自动停止")
+                    # 延迟1秒后触发自动停止，给用户一点时间看到最后一个动作
+                    import threading
+                    threading.Timer(1.0, self.trigger_auto_stop).start()
+        except Exception as e:
+            print(f"检查自动停止时出错: {e}")
+
+    def trigger_auto_stop(self):
+        """触发自动停止录制"""
+        print("发射自动停止信号")
+        self.auto_stop_requested.emit()
+        
+    def _on_auto_stop_requested(self):
+        """处理自动停止信号（在主线程中执行）"""
+        try:
+            from PeelApp import cmd
+            main_wnd = cmd.g_mainWnd
+            
+            if main_wnd and hasattr(main_wnd, 'auto_stop_recording'):
+                main_wnd.auto_stop_recording()
+        except Exception as e:
+            print(f"处理自动停止信号时出错: {e}")
 
     def push_state(self):
 
@@ -476,9 +531,13 @@ class CMAvatarDownloadThread(DownloadThread):
         return str(self.device) + " Downloader"
 
     def teardown(self):
-        if self.socket:
-            self.socket.close()
-            self.socket = None
+        if hasattr(self, 'socket') and self.socket is not None:
+            try:
+                self.socket.close()
+            except Exception as e:
+                print(f"Error closing socket in teardown: {e}")
+            finally:
+                self.socket = None
         super(CMAvatarDownloadThread, self).teardown()
 
     def run(self):
@@ -575,7 +634,13 @@ class CMAvatarDownloadThread(DownloadThread):
         except Exception as e:
             self.log(str(e))
         finally:
-            self.socket.close()
+            if hasattr(self, 'socket') and self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception as e:
+                    print(f"Error closing socket: {e}")
+                finally:
+                    self.socket = None
 
         self.all_done.emit()
 

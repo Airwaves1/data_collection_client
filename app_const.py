@@ -26,5 +26,5 @@ Regular_Char_Half = r'^[a-zA-Z0-9!@#$%^&*(),.?":{}|<>]+$'
 Lang_ENG = 0
 Lang_CHS = 1
 
-Defualt_Edit_Shot_Name = 'Take'
+Defualt_Edit_Shot_Name = ''
 Defualt_Edit_Take_No = 1

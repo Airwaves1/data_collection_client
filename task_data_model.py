@@ -38,9 +38,10 @@ class TaskData:
             task_id=str(row_data.get('task_id', '')),
             task_name_en=str(row_data.get('task_name_EN', '')),
             task_name_cn=str(row_data.get('task_name_CN', '')),
-            file_size_mb=str(row_data.get('file size(MB)', '')),
-            total_action_slices=str(row_data.get('total_action-slices', '')),
-            duration_s=str(row_data.get('duration(s)', '')),
+            # 不再从Excel读取以下三项，保持为空字符串
+            file_size_mb="",
+            total_action_slices="",
+            duration_s="",
             scenarios=str(row_data.get('scenarios', '')),
             action_text_en=str(row_data.get('example of action_text', '')),
             action_text_cn=str(row_data.get('example of action_text_CN', '')),
@@ -101,20 +102,15 @@ class TaskDataManager:
     def load_from_excel(self, file_path: str) -> bool:
         """从Excel文件加载数据"""
         try:
-            print(f"[DEBUG] 开始加载Excel文件: {file_path}")
             
-            # 读取Excel文件，不跳过任何行，让pandas自动识别列名
-            df = pd.read_excel(file_path)
-            print(f"[DEBUG] Excel文件读取成功，数据形状: {df.shape}")
-            print(f"[DEBUG] 原始列名: {list(df.columns)}")
+            # 读取Excel文件，指定引擎
+            df = pd.read_excel(file_path, engine='openpyxl')
             
             # 检查是否有正确的列名
             if 'task_id' not in df.columns:
-                print(f"[DEBUG] 未找到task_id列，尝试查找包含task_id的行作为列名")
                 # 查找包含task_id的行
                 for i, row in df.iterrows():
                     if 'task_id' in str(row.values):
-                        print(f"[DEBUG] 在第{i}行找到task_id，使用该行作为列名")
                         # 使用该行作为列名
                         df.columns = df.iloc[i]
                         # 删除该行数据
@@ -126,38 +122,25 @@ class TaskDataManager:
                     print(f"[ERROR] 未找到包含task_id的行")
                     return False
             
-            print(f"[DEBUG] 修正后的列名: {list(df.columns)}")
-            
-            # 打印前几行数据用于调试
-            print(f"[DEBUG] 前5行数据:")
-            print(df.head())
-            
             self.tasks.clear()
             
             valid_tasks = 0
             invalid_tasks = 0
             
             for index, row in df.iterrows():
-                print(f"[DEBUG] 处理第{index}行数据...")
                 row_dict = row.to_dict()
-                print(f"[DEBUG] 行数据: {row_dict}")
                 
                 task = TaskData.from_excel_row(row_dict)
-                print(f"[DEBUG] 创建的任务对象 - task_id: '{task.task_id}', task_name_en: '{task.task_name_en}'")
-                
+
                 if task.task_id and str(task.task_id).strip():  # 只添加有ID的任务
                     self.tasks.append(task)
                     valid_tasks += 1
-                    print(f"[DEBUG] 有效任务 #{valid_tasks}: {task.get_display_name()}")
                 else:
                     invalid_tasks += 1
-                    print(f"[DEBUG] 无效任务 #{invalid_tasks}: task_id为空或无效")
             
-            print(f"[DEBUG] 导入完成 - 有效任务: {valid_tasks}, 无效任务: {invalid_tasks}, 总任务数: {len(self.tasks)}")
             return True
             
         except Exception as e:
-            print(f"[ERROR] Load excel error: {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -169,6 +152,13 @@ class TaskDataManager:
             if task.scenarios:
                 scenarios.add(task.scenarios)
         return sorted(list(scenarios))
+    
+    def get_task_by_id(self, task_id: str) -> Optional[TaskData]:
+        """根据任务ID获取任务数据"""
+        for task in self.tasks:
+            if task.task_id == task_id:
+                return task
+        return None
 
     def get_tasks_by_scenario(self, scenario: str) -> List[TaskData]:
         """根据场景获取任务列表"""

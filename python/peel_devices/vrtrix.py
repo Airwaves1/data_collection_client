@@ -42,7 +42,7 @@ class AddVrtrixWidget(BaseDeviceWidget):
         self.device_port = QtWidgetFactory.create_QLineEdit_port(settings.value("VrtrixPort", str(default_vrtrix_port)))
         form_layout.addRow(self.tr("Port"), self.device_port)
 
-        self.listen_ip = QtWidgetFactory.create_QComboBox_IP(settings.value("VrtrixListenIp", self.tr("--all--")))
+        self.listen_ip = QtWidgetFactory.create_QComboBox_IP_Editable(settings.value("VrtrixListenIp", self.tr("--all--")))
         form_layout.addRow(self.tr("Listen IP"), self.listen_ip)
 
         self.listen_port = QtWidgetFactory.create_QLineEdit_port(settings.value("VrtrixListenPort", str(default_listener_port)))

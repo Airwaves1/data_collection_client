@@ -65,6 +65,11 @@ class QtWidgetFactory():
     def create_QComboBox_IP(current_ip):
         return InterfaceCombo(False, current_ip)
     
+    @staticmethod
+    def create_QComboBox_IP_Editable(current_ip):
+        """创建可编辑的IP地址组合框，支持手动输入和选择网络接口"""
+        return EditableInterfaceCombo(False, current_ip)
+    
 
 class InterfaceCombo(QComboBox):
     def __init__(self, show_all, current_text="", parent=None):
@@ -90,3 +95,72 @@ class InterfaceCombo(QComboBox):
             return ""
         else:
             return self.currentText()
+
+
+class EditableInterfaceCombo(QComboBox):
+    """可编辑的IP地址组合框，支持手动输入和选择网络接口"""
+    
+    def __init__(self, show_all, current_text="", parent=None):
+        super(EditableInterfaceCombo, self).__init__(parent)
+        self.setStyleSheet(app_css.SheetStyle_Combo_All)
+        self.setEditable(True)  # 允许编辑
+        
+        # 添加常用IP地址选项
+        common_ips = [
+            "127.0.0.1",      # 本地回环
+            "192.168.1.1",    # 常见路由器IP
+            "192.168.0.1",    # 常见路由器IP
+            "10.0.0.1",       # 内网IP
+            "172.16.0.1",     # 内网IP
+        ]
+        
+        if show_all:
+            self.addItem(self.tr("--all--"))
+        
+        # 添加常用IP地址
+        for ip in common_ips:
+            if ip not in [self.itemText(i) for i in range(self.count())]:
+                self.addItem(ip)
+        
+        # 添加网络接口IP地址
+        for i in QtNetwork.QNetworkInterface.allInterfaces():
+            if not (i.flags() & QtNetwork.QNetworkInterface.IsUp):
+                continue
+            for j in i.addressEntries():
+                if j.ip().protocol() != QtNetwork.QAbstractSocket.NetworkLayerProtocol.IPv4Protocol:
+                    continue
+                ip_str = j.ip().toString()
+                if ip_str not in [self.itemText(k) for k in range(self.count())]:
+                    self.addItem(ip_str)
+        
+        # 设置当前文本
+        if current_text:
+            self.setCurrentText(current_text)
+        else:
+            # 默认选择第一个可用的IP地址
+            for i in range(self.count()):
+                if self.itemText(i) != self.tr("--all--"):
+                    self.setCurrentIndex(i)
+                    break
+    
+    def ip(self):
+        """获取当前选择的IP地址"""
+        current_text = self.currentText().strip()
+        if current_text == self.tr("--all--"):
+            return ""
+        else:
+            return current_text
+    
+    def validate_ip(self, ip_text):
+        """验证IP地址格式"""
+        import re
+        ip_pattern = r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$'
+        match = re.match(ip_pattern, ip_text)
+        if not match:
+            return False
+        
+        # 检查每个数字是否在0-255范围内
+        for group in match.groups():
+            if int(group) > 255:
+                return False
+        return True

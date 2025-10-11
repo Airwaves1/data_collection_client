@@ -20,13 +20,34 @@ class AppConfig:
             return None
         
     def load_ui_config(self, mainWnd):
+        """加载UI配置，失败时跳过"""
+        try:
+            # 加载表格列宽信息
+            self.load_ui_table_info('TakeTable', mainWnd._table_takelist)
+            self.load_ui_table_info('DeviceTable', mainWnd._deviceTable)
+            self.load_ui_table_info('ShotTable', mainWnd._shotTable)
 
-        self.load_ui_table_info('TakeTable', mainWnd._table_takelist)
-        self.load_ui_table_info('DeviceTable', mainWnd._deviceTable)
-        self.load_ui_table_info('ShotTable', mainWnd._shotTable)
-
-        mainWnd._save_fullpath = self._settings.value('LastOpenFile', '')
-        mainWnd._open_folder = self._settings.value('LastOpenFolder', self._current_path)
+            # 加载文件路径信息
+            mainWnd._save_fullpath = self._settings.value('LastOpenFile', '')
+            mainWnd._open_folder = self._settings.value('LastOpenFolder', self._current_path)
+            
+            # 读取当前采集者
+            try:
+                cur = self._settings.value('CurrentCollectorJson')
+                if cur:
+                    import json
+                    mainWnd.current_collector = json.loads(cur)
+                    if hasattr(mainWnd, '_collector_label') and mainWnd._collector_label:
+                        name = mainWnd.current_collector.get('collector_name','')
+                        cid = mainWnd.current_collector.get('collector_id','')
+                        mainWnd._collector_label.setText(mainWnd.tr('采集者: ') + f"{name}({cid})")
+            except Exception as e:
+                print(f"加载采集者信息失败，跳过: {e}")
+                pass
+                
+        except Exception as e:
+            print(f"加载UI配置失败，跳过: {e}")
+            return
 
     #设置TableWidget的宽度信息
     def save_ui_table_info(self, section, tableWidget):
@@ -57,15 +78,27 @@ class AppConfig:
             return None
 
     def load_ui_table_info(self, section, tableWidget):
-
-        take_column_width = self._settings.value(section + 'ColumnWidth')
-        if take_column_width is None or len(take_column_width) == 0:
+        """加载表格列宽信息，失败时跳过"""
+        try:
+            take_column_width = self._settings.value(section + 'ColumnWidth')
+            if take_column_width is None or len(take_column_width) == 0:
+                return
+            
+            #去除尾部空格
+            take_column_width = take_column_width.strip()
+            str_col_w = take_column_width.split(' ')
+            
+            # 确保列数匹配
+            current_column_count = tableWidget.columnCount()
+            for i in range(min(len(str_col_w), current_column_count)):
+                try:
+                    col_width = int(str_col_w[i])
+                    if col_width > 0:
+                        tableWidget.setColumnWidth(i, col_width)
+                except (ValueError, IndexError) as e:
+                    print(f"跳过列 {i} 的宽度设置: {e}")
+                    continue
+                    
+        except Exception as e:
+            print(f"加载表格 {section} 列宽信息失败，跳过: {e}")
             return
-        
-        #去除尾部空格
-        take_column_width = take_column_width.strip()
-        str_col_w = take_column_width.split(' ')
-        for i in range(len(str_col_w)):
-            col_width = int(str_col_w[i])
-            if col_width > 0:
-                tableWidget.setColumnWidth(i, col_width)

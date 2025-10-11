@@ -45,6 +45,11 @@ def get_devices_data():
     global DEVICES
     return DEVICES.get_data()
 
+def get_device_config_data():
+    """获取设备配置数据（不包含takes）"""
+    global DEVICES
+    return DEVICES.get_device_config_data()
+
 def get_devices_count():
     return len(DEVICES)
 
