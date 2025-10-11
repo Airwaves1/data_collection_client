@@ -82,6 +82,14 @@ class DBController:
         """
         result = self.api_client.create_observations(obs)
         return result if result else 0
+    
+    def list_observations(self, limit: int = 2000, offset: int = 0) -> List[Dict[str, Any]]:
+        """获取观察数据列表"""
+        return self.api_client.list_observations(limit, offset)
+    
+    def get_observations_by_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
+        """根据episode_id获取观察数据"""
+        return self.api_client.get_observations_by_episode(episode_id)
 
     # -------- parameters --------
     def create_parameters(self, params: Dict[str, Any]) -> int:

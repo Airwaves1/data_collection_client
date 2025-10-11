@@ -30,6 +30,8 @@ from task_list_widget import TaskListWidget
 from task_property_widget import TaskPropertyPanel
 from service.db_controller import DBController
 from uuid import uuid4
+from PySide6.QtWidgets import QProgressDialog
+from PySide6.QtCore import QCoreApplication
 
 # 录制按钮长宽
 RecordButtonWidth = 220
@@ -662,7 +664,18 @@ class MainWindow(QMainWindow):
                 return
             
             exported = 0
-            for biz_id in business_task_ids:
+            # 简单进度条：按业务任务ID统计
+            total_tasks = len(business_task_ids)
+            progress = QProgressDialog(self.tr("正在导出 task_info..."), None, 0, total_tasks, self)
+            progress.setWindowTitle(self.tr("导出"))
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+
+            for idx, biz_id in enumerate(business_task_ids, start=1):
+                progress.setLabelText(self.tr(f"正在导出 task_info: {biz_id} ({idx}/{total_tasks})"))
+                progress.setValue(idx - 1)
+                QCoreApplication.processEvents()
                 # 从后端拉取全部TaskInfo并过滤出该业务ID的所有episode
                 resp = self.db_controller.list_task_infos(limit=2000, offset=0) or []
                 if isinstance(resp, dict):
@@ -676,50 +689,12 @@ class MainWindow(QMainWindow):
                     continue
 
                 export_array = []
-                collector_obj_cache = None
                 for data in matched:
-                    # 组织collector对象：{ collector_organization, collector_id, collector_name }
-                    collector_info = data.get('collector')
-                    collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
-                    try:
-                        if isinstance(collector_info, dict):
-                            col = collector_info
-                            collector_obj = {
-                                "collector_organization": col.get('collector_organization', ''),
-                                "collector_id": col.get('collector_id', ''),
-                                "collector_name": col.get('collector_name', '')
-                            }
-                        elif isinstance(collector_info, int):
-                            col = self.db_controller.get_collector(collector_info) or {}
-                            collector_obj = {
-                                "collector_organization": col.get('collector_organization', ''),
-                                "collector_id": col.get('collector_id', ''),
-                                "collector_name": col.get('collector_name', '')
-                            }
-                        elif isinstance(collector_info, str):
-                            # 兼容旧格式: "id_组织_编号_姓名"，尽力解析组织/编号/姓名
-                            parts = collector_info.split('_') if collector_info else []
-                            if len(parts) >= 4:
-                                collector_obj = {
-                                    "collector_organization": parts[1],
-                                    "collector_id": parts[2],
-                                    "collector_name": parts[3]
-                                }
-                            else:
-                                collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": collector_info}
-                        else:
-                            collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
-                    except Exception:
-                        collector_obj = {"collector_organization": "", "collector_id": "", "collector_name": ""}
-                    if (collector_obj_cache is None) and any(collector_obj.values()):
-                        collector_obj_cache = collector_obj
-
                     export_array.append({
                         "episode_id": int(data.get('episode_id') or data.get('id')),
                         "label_info": {"action_config": data.get('action_config', [])},
                         "task_name": data.get('task_name', ''),
-                        "init_scene_text": data.get('init_scene_text', ''),
-                        "collector": collector_obj if any(collector_obj.values()) else (collector_obj_cache or {"collector_organization": "", "collector_id": "", "collector_name": ""})
+                        "init_scene_text": data.get('init_scene_text', '')
                     })
 
                 # 写入 task_info/<biz_id>.json 为数组，包含所有episode
@@ -727,10 +702,156 @@ class MainWindow(QMainWindow):
                 with open(output_file, 'w', encoding='utf-8') as f:
                     json.dump(export_array, f, ensure_ascii=False, indent=2)
                 exported += 1
+
+            progress.setValue(total_tasks)
             
-            QMessageBox.information(self, self.tr("导出完成"), self.tr(f"已导出 {exported} 个任务到: {root_dir}"))
+            # task_info导出完成后，开始导出视频文件
+            self._export_video_files(export_dir, business_task_ids, exported)
+            
         except Exception as e:
             QMessageBox.warning(self, self.tr("导出失败"), self.tr(f"导出发生异常: {e}"))
+
+    def _export_video_files(self, export_dir, business_task_ids, task_info_count):
+        """导出视频文件到指定目录结构"""
+        try:
+            import shutil
+            import glob
+            
+            # 获取所有observations数据
+            observations_data = self.db_controller.list_observations(limit=2000, offset=0) or []
+            if not observations_data:
+                print("没有找到observations数据，跳过视频文件导出")
+                QMessageBox.information(self, self.tr("导出完成"), 
+                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
+                return
+            
+            # 检查observations数据格式
+            if not isinstance(observations_data, list):
+                print(f"observations数据格式错误: {type(observations_data)}")
+                QMessageBox.information(self, self.tr("导出完成"), 
+                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
+                return
+            
+            # 按task_id分组observations
+            observations_by_task = {}
+            for obs in observations_data:
+                # 检查obs是否为字典类型
+                if not isinstance(obs, dict):
+                    print(f"跳过非字典类型的observation数据: {type(obs)}")
+                    continue
+                    
+                # 通过task_info获取task_id
+                task_info_id = obs.get('task_info')
+                if task_info_id:
+                    # 获取对应的task_info
+                    task_info = self.db_controller.get_task(task_info_id)
+                    if task_info and isinstance(task_info, dict):
+                        biz_task_id = str(task_info.get('task_id', ''))
+                        if biz_task_id in business_task_ids:
+                            if biz_task_id not in observations_by_task:
+                                observations_by_task[biz_task_id] = []
+                            observations_by_task[biz_task_id].append(obs)
+            
+            if not observations_by_task:
+                print("没有找到匹配的observations数据，跳过视频文件导出")
+                QMessageBox.information(self, self.tr("导出完成"), 
+                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
+                return
+            
+            # 创建observations目录
+            observations_dir = os.path.join(export_dir, 'observations')
+            os.makedirs(observations_dir, exist_ok=True)
+            
+            # 计算总进度
+            total_episodes = sum(len(episodes) for episodes in observations_by_task.values())
+            progress = QProgressDialog(self.tr("正在导出视频文件..."), None, 0, total_episodes, self)
+            progress.setWindowTitle(self.tr("导出视频"))
+            progress.setCancelButton(None)
+            progress.setMinimumDuration(0)
+            progress.setValue(0)
+            
+            exported_episodes = 0
+            
+            for biz_task_id, episodes in observations_by_task.items():
+                # 创建task_id目录
+                task_dir = os.path.join(observations_dir, biz_task_id)
+                os.makedirs(task_dir, exist_ok=True)
+                
+                for episode in episodes:
+                    # 检查episode是否为字典类型
+                    if not isinstance(episode, dict):
+                        print(f"跳过非字典类型的episode数据: {type(episode)}")
+                        continue
+                        
+                    episode_id = str(episode.get('episode_id', ''))
+                    video_path = episode.get('video_path', '')
+                    depth_path = episode.get('depth_path', '')
+                    
+                    # 检查是否有有效的视频或深度路径
+                    has_video_files = video_path and os.path.exists(video_path)
+                    has_depth_files = depth_path and os.path.exists(depth_path)
+                    
+                    if not has_video_files and not has_depth_files:
+                        print(f"Episode {episode_id} 没有有效的视频或深度文件路径，跳过")
+                        continue
+                    
+                    # 创建episode_id目录
+                    episode_dir = os.path.join(task_dir, episode_id)
+                    videos_dir = os.path.join(episode_dir, 'videos')
+                    depth_dir = os.path.join(episode_dir, 'depth')
+                    os.makedirs(videos_dir, exist_ok=True)
+                    os.makedirs(depth_dir, exist_ok=True)
+                    
+                    # 更新进度
+                    exported_episodes += 1
+                    progress.setLabelText(self.tr(f"正在导出视频: {biz_task_id}/{episode_id} ({exported_episodes}/{total_episodes})"))
+                    progress.setValue(exported_episodes - 1)
+                    QCoreApplication.processEvents()
+                    
+                    # 复制视频文件
+                    if has_video_files:
+                        try:
+                            # 获取目录下所有文件
+                            video_dir = os.path.dirname(video_path)
+                            if os.path.exists(video_dir):
+                                video_files = glob.glob(os.path.join(video_dir, '*'))
+                                for file_path in video_files:
+                                    if os.path.isfile(file_path):
+                                        filename = os.path.basename(file_path)
+                                        dest_path = os.path.join(videos_dir, filename)
+                                        shutil.copy2(file_path, dest_path)
+                                        print(f"复制视频文件: {file_path} -> {dest_path}")
+                            else:
+                                print(f"视频目录不存在: {video_dir}")
+                        except Exception as e:
+                            print(f"复制视频文件失败: {e}")
+                    
+                    # 复制深度文件
+                    if has_depth_files:
+                        try:
+                            # 获取目录下所有文件
+                            depth_dir_path = os.path.dirname(depth_path)
+                            if os.path.exists(depth_dir_path):
+                                depth_files = glob.glob(os.path.join(depth_dir_path, '*'))
+                                for file_path in depth_files:
+                                    if os.path.isfile(file_path):
+                                        filename = os.path.basename(file_path)
+                                        dest_path = os.path.join(depth_dir, filename)
+                                        shutil.copy2(file_path, dest_path)
+                                        print(f"复制深度文件: {file_path} -> {dest_path}")
+                            else:
+                                print(f"深度目录不存在: {depth_dir_path}")
+                        except Exception as e:
+                            print(f"复制深度文件失败: {e}")
+            
+            progress.setValue(total_episodes)
+            
+            QMessageBox.information(self, self.tr("导出完成"), 
+                self.tr(f"已导出 {task_info_count} 个任务信息和 {exported_episodes} 个episode的视频文件到: {export_dir}"))
+            
+        except Exception as e:
+            print(f"导出视频文件失败: {e}")
+            QMessageBox.warning(self, self.tr("导出失败"), self.tr(f"导出视频文件失败: {e}"))
 
     def _export_task_data(self, task_id, takes):
         """导出单个任务的数据"""
@@ -2043,7 +2164,7 @@ class MainWindow(QMainWindow):
             self.start_countdown(3, "准备开始录制")
             # 禁用录制按钮防止重复点击
             self._btn_record.setEnabled(False)
-            self._time_record.start(1000)
+            # 注意：计时器在倒计时结束后才启动，不在这里启动
             # 更新索引 - 使用当前任务信息
             shot_name = self._edt_shotName.text()
             take_no = 1
@@ -2201,6 +2322,8 @@ class MainWindow(QMainWindow):
         # 不再显示标题标签，保持原有样式调用安全
         self._btn_record.setText('00:00:00')
         
+        # 倒计时结束后才开始计时
+        self._time_record.start(1000)
         self._recording = True
 
         # 倒计时结束后立即高亮第一条脚本

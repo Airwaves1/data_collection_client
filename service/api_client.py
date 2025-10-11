@@ -118,6 +118,20 @@ class DataCollectionAPIClient:
         result = self._make_request('POST', endpoint, obs)
         return result.get('id') if result else None
     
+    def list_observations(self, limit: int = 2000, offset: int = 0) -> List[Dict[str, Any]]:
+        """获取观察数据列表"""
+        endpoint = "observations/"
+        params = {'limit': limit, 'offset': offset}
+        result = self._make_request('GET', endpoint, params=params)
+        return result if result else []
+    
+    def get_observations_by_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
+        """根据episode_id获取观察数据"""
+        endpoint = "observations/"
+        params = {'episode_id': episode_id}
+        result = self._make_request('GET', endpoint, params=params)
+        return result[0] if result and len(result) > 0 else None
+    
     # -------- parameters API --------
     def create_parameters(self, params: Dict[str, Any]) -> Optional[int]:
         """创建参数数据"""
