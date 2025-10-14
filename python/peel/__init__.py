@@ -335,6 +335,36 @@ def show_harvest():
     h.deleteLater()
     return h.has_download
 
+def show_harvest_with_path(path, take_name=None):
+    """ Copy the files from the CMAvatar device to a specified directory """
+    print(f"[DEBUG] show_harvest_with_path called with path={path}, take_name={take_name}")
+    
+    # 简化：只查找CMAvatar设备
+    harvest_devices = [d for d in DEVICES if d.has_harvest() and d.device() == "CMAvatar"]
+    if len(harvest_devices) == 0:
+        title = QCoreApplication.translate("peel", "Harvest")
+        msg = QCoreApplication.translate("peel", "No CMAvatar device available")
+        QMessageBox.warning(cmd.getMainWindow(), title, msg)
+        return False
+    
+    # 只使用第一个CMAvatar设备
+    device = harvest_devices[0]
+    print(f"Using single CMAvatar device: {device.name}")
+    
+    # 直接启动下载，不需要对话框
+    try:
+        download_path = os.path.join(path, device.name)
+        print(f"[DEBUG] Calling device.harvest with download_path={download_path}, take_name={take_name}")
+        download_thread = device.harvest(download_path, take_name)
+        download_thread.start()
+        
+        # 启动下载线程，但不等待完成（避免阻塞UI）
+        print(f"[DEBUG] 下载线程已启动，不阻塞UI")
+        return True
+    except Exception as e:
+        print(f"Download failed: {e}")
+        return False
+
 def do_stop():
     """ Called shortly after stop event to update devices """
     global DEVICES

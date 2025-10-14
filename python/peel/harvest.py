@@ -10,7 +10,7 @@ from factory_widget import QtWidgetFactory
 reg_harvest_dir = "HarvestDirectory"
 
 class HarvestDialog(QtWidgets.QDialog):
-    def __init__(self, settings, devices, parent):
+    def __init__(self, settings, devices, parent, preset_path=None):
         super(HarvestDialog, self).__init__(parent)
 
         # from peel.DEVICES - list of peel_device.PeelDevice objects
@@ -33,10 +33,14 @@ class HarvestDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout()
 
-        data_dir = self.settings.value(reg_harvest_dir)
-        if data_dir is None or len(data_dir) == 0:
-            data_dir = os.getcwd() + "\\data"
-            self.settings.setValue(reg_harvest_dir, data_dir)
+        # 使用预设路径或从设置中获取
+        if preset_path:
+            data_dir = preset_path
+        else:
+            data_dir = self.settings.value(reg_harvest_dir)
+            if data_dir is None or len(data_dir) == 0:
+                data_dir = os.getcwd() + "\\data"
+                self.settings.setValue(reg_harvest_dir, data_dir)
 
         # File Path Browser
         file_layout = QtWidgets.QHBoxLayout()
@@ -128,17 +132,14 @@ class HarvestDialog(QtWidgets.QDialog):
             self.go_button.setText(self.tr("Get Files"))
             return
 
-        self.selected_devices = []
-        for i in range(self.device_list.count()):
-            item = self.device_list.item(i)
-            if item.checkState() == QtCore.Qt.Checked:
-                self.selected_devices.append(i)
-
-        if len(self.selected_devices) == 0:
-            QMessageBox.warning(self, self.tr("Collect File"), self.tr("No devices to collect files. Please choose device which need."))
+        # 简化：只处理第一个设备（CMAvatar）
+        if len(self.devices) == 0:
+            QMessageBox.warning(self, self.tr("Collect File"), self.tr("No CMAvatar device available."))
             return
 
-        print("Queue: " + str(self.selected_devices))
+        # 只选择第一个设备
+        self.selected_devices = [0]  # 只选择第一个设备
+        print("Single device mode: CMAvatar")
 
         self.running = True
         self.total_copied = 0

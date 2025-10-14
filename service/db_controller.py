@@ -35,6 +35,14 @@ class DBController:
     def list_collectors(self, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:
         """获取采集者列表"""
         return self.api_client.list_collectors(limit, offset)
+    
+    def register_collector(self, collector_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """用户注册"""
+        return self.api_client.register_collector(collector_data)
+    
+    def login_collector(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        """用户登录"""
+        return self.api_client.login_collector(username, password)
 
     # -------- task_info (核心元数据) --------
     def create_task_info(self, task: Dict[str, Any]) -> int:
@@ -70,6 +78,10 @@ class DBController:
     def get_task_info_by_episode(self, episode_id: str) -> Optional[Dict[str, Any]]:
         """根据episode_id获取任务信息"""
         return self.api_client.get_task_info_by_episode(episode_id)
+    
+    def get_task_info_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """根据业务task_id获取任务信息"""
+        return self.api_client.get_task_info_by_task_id(task_id)
 
     def list_tasks_by_collector(self, collector_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         """根据采集者ID获取任务列表"""
@@ -144,6 +156,10 @@ class DBController:
     def update_task_status(self, task_id: int, task_status: str) -> bool:
         """更新任务状态"""
         return self.api_client.update_task_status(task_id, task_status)
+    
+    def update_task_by_task_id(self, task_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """根据业务task_id更新任务信息"""
+        return self.api_client.update_task_by_task_id(task_id, task_data)
 
     # -------- 读取 API --------
     def get_task_info(self, task_id: int):

@@ -55,7 +55,7 @@ def updateDevice(device):
     # if g_mainWnd is not None:
     #     QMessageBox.warning(g_mainWnd, "cmd", 'Update Device: ' + device.name + ' - ' + device.status + ' - ' + device.info)
     # else:
-    print('Update Device: ' + device.name + ' - ' + device.status + ' - ' + device.info)
+    # print('Update Device: ' + device.name + ' - ' + device.status + ' - ' + device.info)
     if g_mainWnd is not None:
         g_mainWnd.updateDevice(device)
 

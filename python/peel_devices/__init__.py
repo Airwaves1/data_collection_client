@@ -307,7 +307,7 @@ class PeelDeviceBase(QtCore.QObject):
             calling this from get_state() or get_info()
         """
 
-        print(f"ref {self.name} {len(self.list_takes())}")
+        # print(f"ref {self.name} {len(self.list_takes())}")
 
         if state is None:
             state = self.get_state()
@@ -352,7 +352,7 @@ class PeelDeviceBase(QtCore.QObject):
         if self.device_id is None:
             # print("No device id")
             return
-        cmd.writeLog(f"State: {self.name} {state} {info}\n")
+        # cmd.writeLog(f"State: {self.name} {state} {info}\n")
         cmd.updateDevice(self.device_ref(state, info))
 
     def GetTakeInfo(self):

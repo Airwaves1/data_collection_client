@@ -3,7 +3,7 @@ from peel_devices import PeelDeviceBase, DownloadThread, FileItem, BaseDeviceWid
 from PySide6 import QtWidgets, QtCore
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import Signal
-import threading, socket, struct
+import threading, socket, struct, time
 from PySide6.QtCore import QCoreApplication
 import os
 import os.path
@@ -141,6 +141,8 @@ class CMAvatar(PeelDeviceBase):
 
     # 定义信号
     auto_stop_requested = Signal()
+    export_completed = Signal(bool, str, str)  # export_result, export_message, take_name
+    file_list_received = Signal(list)  # file_list
 
     def __init__(self,
                  name,
@@ -285,7 +287,8 @@ class CMAvatar(PeelDeviceBase):
             self.clientTransform.send_message(common.cmd_req_record, (self.listen_ip, self.listen_port, False, self.current_take))
 
         if command == "Export":
-            exportPath = arg
+            exportPath = ""
+            
             takeTable = self.GetTakeInfo()
             for row in range(takeTable.rowCount()):
                 item = takeTable.item(row, 0)  # 第一列，列号为0
@@ -295,8 +298,12 @@ class CMAvatar(PeelDeviceBase):
                     self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, item.text()))
 
     def callback(self, address, command, *args):
+        # 添加通用调试打印，显示所有收到的命令
+        print(f"[DEBUG] CMAvatar callback from {address} {command} {args}")
 
-        cmd.writeLog(f"{self.name} callback from {address}  {command}  {args}\n")
+        # 过滤心跳回调的打印，减少日志噪音
+        if command != common.cmd_rep_heatbeat:
+            cmd.writeLog(f"{self.name} callback from {address}  {command}  {args}\n")
 
         self.got_response = True
         # bool + char* + char*
@@ -333,6 +340,62 @@ class CMAvatar(PeelDeviceBase):
             if self.current_take:
                 self.takes[self.current_take] = { 'remote_project': proj_fullPath, 'remote_files' : remote_files, 'local_files': []}
 
+            return
+
+        if command == common.cmd_rep_exportFinish:
+            # 设备导出完成回调
+            # 设备返回格式: (take_name,) 或 (export_result, take_name) 或 (export_result, export_message, take_name)
+            if len(args) == 1:
+                # 只有take_name
+                take_name = args[0]
+                export_result = True
+                export_message = ""
+            elif len(args) == 2:
+                # export_result 和 take_name
+                export_result = args[0]
+                take_name = args[1]
+                export_message = ""
+            elif len(args) >= 3:
+                # export_result, export_message, take_name
+                export_result = args[0]
+                export_message = args[1]
+                take_name = args[2]
+            else:
+                export_result = True
+                export_message = ""
+                take_name = ""
+            
+            print(f"[DEBUG] CMAvatar导出完成: result={export_result}, message={export_message}, take_name={take_name}")
+            
+            # 发送信号通知主窗口导出完成
+            if export_result and take_name:
+                print(f"[DEBUG] 发送export_completed信号: result={export_result}, message={export_message}, take_name={take_name}")
+                self.export_completed.emit(export_result, export_message, take_name)
+                print(f"[DEBUG] export_completed信号发送完成")
+            else:
+                print(f"[WARNING] 导出失败或无take_name: result={export_result}, take_name={take_name}")
+            
+            return
+
+        # 处理文件列表响应
+        if command == '/control/filelist/result':
+            print(f"[DEBUG] 收到文件列表响应命令: {command}, args={args}")
+            # 设备返回文件列表
+            # args[0] 是文件数量，args[1:] 是文件路径列表
+            if len(args) > 0:
+                file_count = args[0]
+                file_list = args[1:] if len(args) > 1 else []
+                print(f"[DEBUG] 收到文件列表: 数量={file_count}, 文件={file_list}")
+                
+                # 发送信号通知下载线程文件列表已收到
+                if hasattr(self, 'file_list_received'):
+                    print(f"[DEBUG] 发送file_list_received信号: {file_list}")
+                    self.file_list_received.emit(file_list)
+                else:
+                    print(f"[WARNING] 设备没有file_list_received信号")
+            else:
+                print(f"[WARNING] 文件列表响应参数为空: args={args}")
+            
             return
 
         if command == common.cmd_rep_heatbeat:
@@ -436,35 +499,31 @@ class CMAvatar(PeelDeviceBase):
     def has_harvest(self):
         return True
 
-    def harvest(self, directory):
-        thread = CMAvatarDownloadThread(self, directory)
-        for take, remote_item in self.takes.items():
-            if not remote_item:
-                continue
-
+    def harvest(self, directory, take_name=None):
+        """
+        下载设备文件到指定目录
+        directory: 本地下载目录
+        take_name: take名称，用于文件夹下载模式
+        """
+        print(f"[DEBUG] CMAvatar.harvest called with directory={directory}, take_name={take_name}")
+        
+        if take_name:
+            # 文件夹下载模式：基于take_name动态扫描整个文件夹
+            print(f"[DEBUG] 开始文件夹下载模式，take_name: {take_name}")
+            thread = CMAvatarDownloadThread(self, directory, take_name=take_name)
+            print(f"[DEBUG] 启动下载线程...")
             try:
-                remote_project = remote_item['remote_project']
-                remote_files = remote_item['remote_files']
-                local_files = remote_item['local_files']
-                local_files.clear()
-
-                for remote_file in remote_files:
-                    # Get remote project name
-                    remote_project_name = os.path.basename(remote_project)
-                    remote_project_root = remote_project.replace(remote_project_name, '')
-                    relative_path = remote_file.replace(remote_project_root, '')
-                    if relative_path.startswith('/') == False and relative_path.startswith('\\') == False:
-                        relative_path = '/' + relative_path
-                        
-                    local_fullpath = directory + relative_path
-                    local_folder = os.path.dirname(os.path.abspath(local_fullpath))
-                    fileItem = FileItem(remote_project, remote_file, local_folder, local_fullpath)
-                    
-                    thread.files.append(fileItem)
-                    local_files.append(local_fullpath)
+                thread.start()
+                print(f"[DEBUG] 下载线程已启动")
+                print(f"[DEBUG] 线程状态: {thread.status}")
+                print(f"[DEBUG] 线程是否运行: {thread.isRunning()}")
             except Exception as e:
-                print("Harvest files error, exception: " + str(e))
-                continue
+                print(f"[ERROR] 启动下载线程失败: {e}")
+        else:
+            # 如果没有take_name，报错
+            print(f"[ERROR] 文件夹下载模式需要提供take_name")
+            thread = CMAvatarDownloadThread(self, directory, take_name=None)
+            thread.error_message = "文件夹下载模式需要提供take_name"
 
         return thread
 
@@ -503,32 +562,142 @@ class CMAvatar(PeelDeviceBase):
     
     def list_takes(self):
         return self.takes.keys()
+    
+    def GetTakeInfo(self):
+        """获取take信息表格 - 从主窗口获取任务信息"""
+        from PeelApp import cmd
+        
+        # 获取主窗口实例
+        main_window = cmd.getMainWindow()
+        if not main_window:
+            return MockTable([])
+        
+        # 获取主窗口的任务列表
+        takelist = getattr(main_window, '_takelist', [])
+        if not takelist:
+            return MockTable([])
+        
+        class MockTable:
+            def __init__(self, takelist):
+                self.takelist = takelist
+                
+            def rowCount(self):
+                return len(self.takelist)
+                
+            def get_episode_id_from_db(self, take_item):
+                """从数据库获取episode_id"""
+                try:
+                    # 获取主窗口的数据库控制器
+                    main_window = cmd.getMainWindow()
+                    if not main_window or not hasattr(main_window, 'db_controller'):
+                        return 'unknown'
+                    
+                    db_controller = main_window.db_controller
+                    task_id = getattr(take_item, '_task_id', None)
+                    
+                    if not task_id:
+                        return 'unknown'
+                    
+                    # 从数据库查询TaskInfo记录
+                    task_info = db_controller.get_task_info_by_task_id(task_id)
+                    if task_info and 'episode_id' in task_info:
+                        return str(task_info['episode_id'])
+                    
+                    return 'unknown'
+                except Exception as e:
+                    print(f"获取episode_id失败: {e}")
+                    return 'unknown'
+                
+            def item(self, row, col):
+                if col == 0 and row < len(self.takelist):  # 第一列是任务信息组合
+                    take_item = self.takelist[row]
+
+                    # 直接使用TakeItem的take_name字段
+                    take_name = getattr(take_item, '_take_name', '')
+                    
+                    # 如果take_name为空，尝试重新生成
+                    if not take_name:
+                        task_id = getattr(take_item, '_task_id', '') or ''
+                        task_name = getattr(take_item, '_task_name', '') or ''
+                        episode_id = getattr(take_item, '_episode_id', '') or ''
+                        
+                        if task_name and task_id and episode_id:
+                            take_name = f"{task_name}_{task_id}_{episode_id}"
+                        elif task_name and task_id:
+                            take_name = f"{task_name}_{task_id}"
+
+                    class MockItem:
+                        def __init__(self, text):
+                            self.text_value = text
+                        def text(self):
+                            return self.text_value
+                    return MockItem(take_name)
+                return None
+                
+            def cellWidget(self, row, col):
+                if col == 6 and row < len(self.takelist):  # 第7列是状态下拉框
+                    take_item = self.takelist[row]
+                    task_status = getattr(take_item, '_task_status', 'pending')
+                    
+                    class MockComboBox:
+                        def __init__(self, status):
+                            # 将状态映射到中文显示
+                            status_map = {
+                                'pending': '待处理',
+                                'accepted': '接受', 
+                                'rejected': '已拒绝',
+                                'ng': 'NG'
+                            }
+                            self.current_text = status_map.get(status, '待处理')
+                        def currentText(self):
+                            return self.current_text
+                    return MockComboBox(task_status)
+                return None
+        
+        return MockTable(takelist)
 
 
 class CMAvatarDownloadThread(DownloadThread):
+    """
+    全新的文件夹递归下载线程
+    使用现有的cmd_req_filelist命令获取文件列表，然后递归下载
+    """
 
-    def __init__(self, device, directory, listen_port=8444, takes=None):
+    def __init__(self, device, directory, listen_port=8444, take_name=None):
+        print(f"[DEBUG] CMAvatarDownloadThread.__init__ called with take_name={take_name}")
         super(CMAvatarDownloadThread, self).__init__()
-        self.takes = takes
         self.device = device
-        self.listen_port = listen_port
         self.directory = directory
+        self.listen_port = listen_port
         self.file_progress = 0.0
-
         self.files = []
         self.file_i = None
         self.tick_mod = 0
+        
+        # 文件夹下载相关
+        self.take_name = take_name  # 直接使用传入的take_name
+        self.file_list_received = False
+        self.file_list = []
+        self.download_mode = "folder"  # 默认文件夹下载模式
+        
+        # 错误处理
+        self.error_message = None
+
+        print(f"[DEBUG] 创建Socket，设备IP: {device.listen_ip}, 端口: {self.listen_port}")
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(5)
-
             self.socket.bind((device.listen_ip, self.listen_port))
+            print(f"[DEBUG] Socket创建成功")
         except Exception as e:
+            print(f"[ERROR] Socket creation failed: {e}")
             self.log(str(e))
             self.teardown()
             
+        print(f"[DEBUG] CMAvatarDownloadThread.__init__ 完成")
+            
     def __str__(self):
-        return str(self.device) + " Downloader"
+        return str(self.device) + " Folder Downloader"
 
     def teardown(self):
         if hasattr(self, 'socket') and self.socket is not None:
@@ -540,108 +709,227 @@ class CMAvatarDownloadThread(DownloadThread):
                 self.socket = None
         super(CMAvatarDownloadThread, self).teardown()
 
+    def _request_file_list(self, take_name):
+        """
+        使用现有的cmd_req_filelist命令请求文件列表
+        """
+        print(f"[DEBUG] 请求文件列表: {take_name}")
+        print(f"[DEBUG] 设备IP: {self.device.listen_ip}, 端口: {self.listen_port}")
+        print(f"[DEBUG] 发送命令: {common.cmd_req_filelist}")
+        print(f"[DEBUG] 命令参数: (self.device.listen_ip={self.device.listen_ip}, self.listen_port={self.listen_port}, take_name={take_name})")
+        
+        # 发送文件列表请求命令
+        # 假设设备支持传入take_name作为参数
+        try:
+            self.device.clientTransform.send_message(common.cmd_req_filelist, (self.device.listen_ip, self.listen_port, take_name))
+            print(f"[DEBUG] 已发送文件列表请求命令")
+            print(f"[DEBUG] 等待设备响应 /control/filelist/result 命令...")
+        except Exception as e:
+            print(f"[ERROR] 发送文件列表请求失败: {e}")
+            self.error_message = f"发送文件列表请求失败: {e}"
+
+    def _on_file_list_received(self, file_list):
+        """
+        处理设备返回的文件列表
+        """
+        print(f"[DEBUG] 收到文件列表: {file_list}")
+        self.file_list = file_list
+        self.file_list_received = True
+
     def run(self):
-
-        print("Downloading %d CMAvatar files" % len(self.files))
-        self.log(self.tr("Downloading %s files count: %d") % (self.device.name, len(self.files)))
-
-        if not os.path.isdir(self.directory):
-            try:
-                os.mkdir(self.directory)
-            except IOError:
-                self.log(self.tr("Error could not create directory: ") + str(self.directory))
-                self.set_finished()
-                return
-
-        self.set_started()
-
-        self.file_i = 0
-
-        if self.socket == None:
-            self.log(self.tr("%s device connect failed.\n" % self.device.name))
+        """
+        文件夹递归下载主流程
+        """
+        print(f"[DEBUG] ===== CMAvatarDownloadThread.run() 开始执行 =====")
+        print(f"[DEBUG] 开始文件夹下载，take_name: {self.take_name}")
+        print(f"[DEBUG] 下载目录: {self.directory}")
+        print(f"[DEBUG] 设备: {self.device}")
+        
+        # 检查take_name
+        if not self.take_name:
+            print(f"[ERROR] 文件夹下载需要提供take_name")
+            self.log("文件夹下载需要提供take_name")
+            self.set_finished()
+            return
+        
+        # 检查socket
+        if self.socket is None:
+            print(f"[ERROR] Socket创建失败")
+            self.log(f"{self.device.name} 设备连接失败")
             self.all_done.emit()
             return
-
+        
         try:
+            # 创建本地下载目录
+            if not os.path.isdir(self.directory):
+                try:
+                    os.makedirs(self.directory)
+                    print(f"[DEBUG] 创建下载目录: {self.directory}")
+                except IOError as e:
+                    print(f"[ERROR] 无法创建目录: {e}")
+                    self.log(f"无法创建目录: {self.directory}")
+                    self.set_finished()
+                    return
+            
+            # 启动socket监听
             self.socket.listen()
-            while self.is_running():
-                # For each file - loop much increment file_i or break
-                if self.file_i >= len(self.files):
-                    self.log(self.tr("No more files"))
-                    break
-
+            print(f"[DEBUG] Socket开始监听端口: {self.listen_port}")
+            
+            # 连接文件列表信号
+            if hasattr(self.device, 'file_list_received'):
+                self.device.file_list_received.connect(self._on_file_list_received)
+            
+            # 请求文件列表
+            self._request_file_list(self.take_name)
+            
+            # 等待文件列表返回（设置超时）
+            timeout_count = 0
+            max_timeout = 30  # 30秒超时
+            
+            print(f"[DEBUG] 开始等待文件列表响应...")
+            while not self.file_list_received and timeout_count < max_timeout:
+                time.sleep(1)
+                timeout_count += 1
+                print(f"[DEBUG] 等待文件列表... ({timeout_count}/{max_timeout})")
+                
+                # 每5秒检查一次设备状态
+                if timeout_count % 5 == 0:
+                    print(f"[DEBUG] 设备状态检查: IP={self.device.listen_ip}, 端口={self.listen_port}")
+                    print(f"[DEBUG] 信号连接状态: {hasattr(self.device, 'file_list_received')}")
+            
+            # 断开信号连接
+            if hasattr(self.device, 'file_list_received'):
+                try:
+                    self.device.file_list_received.disconnect(self._on_file_list_received)
+                except:
+                    pass
+            
+            if not self.file_list_received:
+                print(f"[ERROR] 获取文件列表超时")
+                self.log("获取文件列表超时")
+                self.set_finished()
+                return
+            
+            if not self.file_list:
+                print(f"[WARNING] 文件夹为空: {self.take_name}")
+                self.log(f"文件夹为空: {self.take_name}")
+                self.set_finished()
+                return
+            
+            # 构建FileItem列表
+            for remote_file in self.file_list:
+                # 构建本地文件路径，保持目录结构
+                # remote_file 格式: /path/to/take_name/file.ext
+                # 本地路径: directory/take_name/file.ext
+                
+                # 提取文件名
+                file_name = os.path.basename(remote_file)
+                
+                # 构建本地完整路径
+                local_file_path = os.path.join(self.directory, self.take_name, file_name)
+                local_folder = os.path.dirname(local_file_path)
+                
+                # 创建FileItem
+                fileItem = FileItem("", remote_file, local_folder, local_file_path)
+                self.files.append(fileItem)
+            
+            print(f"[DEBUG] 准备下载 {len(self.files)} 个文件")
+            self.log(f"准备下载 {len(self.files)} 个文件")
+            
+            # 开始下载文件
+            self.set_started()
+            self.file_i = 0
+            
+            while self.is_running() and self.file_i < len(self.files):
                 this_file = self.files[self.file_i]
+                
+                # 创建本地目录
                 if not os.path.exists(this_file.local_project):
                     try:
                         os.makedirs(this_file.local_project)
-                    except IOError:
-                        self.log(self.tr("Error could not create directory: ") + this_file.local_project)
+                    except IOError as e:
+                        print(f"[ERROR] 无法创建目录: {e}")
+                        self.log(f"无法创建目录: {this_file.local_project}")
+                        self.file_i += 1
                         continue
                 
-                fileName = os.path.basename(this_file.local_file)
-                this_name = str(self.device) + ":" + fileName
-
-                # Skip existing
-                #full_path = os.path.join(local_folder, this_file.local_file)
+                file_name = os.path.basename(this_file.local_file)
+                this_name = f"{self.device.name}:{file_name}"
+                
+                # 跳过已存在的文件
                 if os.path.isfile(this_file.local_file):
+                    print(f"[DEBUG] 跳过已存在文件: {file_name}")
                     self.file_i += 1
                     major = float(self.file_i) / float(len(self.files))
                     self.tick.emit(major)
                     self.file_done.emit(this_name, self.COPY_SKIP, None)
                     continue
-
-                # Tell the CMAvatar we want it to send us a file
-                #self.device.client.send_message("/control/transport", (self.device.listen_ip, self.listen_port, this_file.remote_file))
-                self.device.clientTransform.send_message(common.cmd_req_transport, (self.device.listen_ip, self.listen_port, this_file.remote_file))
+                
+                # 请求设备发送文件
+                print(f"[DEBUG] 请求下载文件: {this_file.remote_file}")
+                self.device.clientTransform.send_message(
+                    common.cmd_req_transport, 
+                    (self.device.listen_ip, self.listen_port, this_file.remote_file)
+                )
                 self.file_progress = 0
-
+                
                 try:
-                    # Wait for the connection from the device sending the file
+                    # 等待设备连接
                     conn, addr = self.socket.accept()
+                    print(f"[DEBUG] 设备连接: {addr}")
                 except socket.timeout:
-                    self.set_current("No response for file: " + this_file.remote_file)
-                    print("No response for: " + this_file.remote_file)
-                    self.file_done.emit(this_name, DownloadThread.COPY_FAIL, "Timeout")
+                    print(f"[ERROR] 文件下载超时: {this_file.remote_file}")
+                    self.set_current(f"文件下载超时: {file_name}")
+                    self.file_done.emit(this_name, self.COPY_FAIL, "Timeout")
                     conn = None
-
+                
                 if conn is not None:
-
-                    conn.settimeout(2)
-                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
-
-                    print('open full path: ' + this_file.local_file)
+                    try:
+                        conn.settimeout(10)  # 文件传输超时
+                        conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                        
+                        print(f"[DEBUG] 开始下载文件: {this_file.local_file}")
+                        
+                        # 下载文件
+                        local_fp = open(this_file.local_file, "wb")
+                        self.read(conn, this_file, local_fp)
+                        local_fp.close()
+                        conn.close()
+                        
+                        if this_file.complete:
+                            print(f"[DEBUG] 文件下载完成: {file_name}")
+                            self.file_done.emit(this_name, this_file.complete, this_file.error)
+                        else:
+                            print(f"[ERROR] 文件下载失败: {file_name}")
+                            self.file_done.emit(this_name, this_file.complete, this_file.error)
+                            # 删除不完整的文件
+                            if os.path.exists(this_file.local_file):
+                                os.unlink(this_file.local_file)
                     
-                    # Get the file
-                    local_fp = open(this_file.local_file, "wb")
-                    self.read(conn, this_file, local_fp)
-                    if this_file.complete:
-                        print('get file complete...')
-                        self.file_done.emit(this_name, this_file.complete, this_file.error)
-
-                    local_fp.close()
-                    conn.close()
-
-                    if not this_file.complete:
-                        os.unlink(this_file.local_file)
-
+                    except Exception as e:
+                        print(f"[ERROR] 文件下载异常: {e}")
+                        self.file_done.emit(this_name, self.COPY_FAIL, str(e))
+                        if conn:
+                            conn.close()
+                
+                # 更新进度
                 self.file_i += 1
                 self.file_progress = 1.0
                 major = float(self.file_i) / float(len(self.files))
                 self.tick.emit(major)
-
-            self.log(self.tr("Download Thread done"))
-
+            
+            print(f"[DEBUG] 文件夹下载完成")
+            self.log("文件夹下载完成")
+            
         except Exception as e:
-            self.log(str(e))
+            print(f"[ERROR] 下载过程异常: {e}")
+            self.log(f"下载过程异常: {e}")
         finally:
-            if hasattr(self, 'socket') and self.socket is not None:
-                try:
-                    self.socket.close()
-                except Exception as e:
-                    print(f"Error closing socket: {e}")
-                finally:
-                    self.socket = None
-
+            if self.socket:
+                self.socket.close()
+                self.socket = None
+        
+        self.set_finished()
         self.all_done.emit()
 
     def read(self, conn, this_file, fp):

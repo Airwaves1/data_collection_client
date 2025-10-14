@@ -16,13 +16,15 @@ class ActionInfo:
 
 
 class TakeItem:
-    def __init__(self, shot_name="", take_no=0, take_name="", take_desc="", take_note="", record_id=None):
-        # Shot名称
-        self._shot_name = shot_name
-        # Take No.
-        self._take_no = take_no
-        # Take名
-        self._take_name = take_name
+    def __init__(self, task_id="", task_name="", episode_id="", take_desc="", take_note="", record_id=None):
+        # 任务ID（业务任务ID）
+        self._task_id = task_id
+        # 任务名称（从数据库获取）
+        self._task_name = task_name
+        # Episode ID（从数据库获取）
+        self._episode_id = episode_id
+        # Take名称（组合格式：task_name_task_id_episode_id）
+        self._take_name = ""
         # 录制描述
         self._take_desc = take_desc
         # 录制批注
@@ -35,26 +37,48 @@ class TakeItem:
         self._end_time = datetime.now()
         # 录制时长
         self._due = 0
-        # 评分
-        self._eval= "--"
         # 任务状态
         self._task_status = "pending"
+        # 动作信息列表
         self._actions = []
+        
+        # 自动生成take_name
+        self._generate_take_name()
+
+    def _generate_take_name(self):
+        """生成take_name：task_name_task_id_episode_id"""
+        if self._task_name and self._task_id and self._episode_id:
+            self._take_name = f"{self._task_name}_{self._task_id}_{self._episode_id}"
+        elif self._task_name and self._task_id:
+            self._take_name = f"{self._task_name}_{self._task_id}"
+        else:
+            self._take_name = ""
+
+    def update_task_info(self, task_id=None, task_name=None, episode_id=None):
+        """更新任务信息并重新生成take_name"""
+        if task_id is not None:
+            self._task_id = task_id
+        if task_name is not None:
+            self._task_name = task_name
+        if episode_id is not None:
+            self._episode_id = episode_id
+        self._generate_take_name()
 
     def add_action(self, action_info):
         self._actions.append(action_info)
 
     def __json__(self):
         return {
-            "shot_name": self._shot_name,
-            "take_no": self._take_no,
+            "task_id": self._task_id,
+            "task_name": self._task_name,
+            "episode_id": self._episode_id,
             "take_name": self._take_name,
             "take_desc": self._take_desc,
             "take_notes": self._take_notes,
+            "record_id": self._record_id,
             "start_time": self._start_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
             "end_time": self._end_time.strftime("%Y-%m-%d %H:%M:%S.%f"),
             "due": str(self._due),
-            "eval": self._eval,
             "task_status": self._task_status,
-            "actions":[a.to_dict() for a in self._actions]
+            "actions": [a.to_dict() for a in self._actions]
         }

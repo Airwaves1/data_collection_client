@@ -20,15 +20,38 @@ class DictShotName:
         self._dict_shotname.clear()
         max_take_no = 0
         for take_item in take_list:
-            # 按shotname进行分组，得到最大Take#与Shot总数
-            if take_item._shot_name in self._dict_shotname:
-                (max_take_no, shot_count) = self._dict_shotname[take_item._shot_name]
+            # 按task_id进行分组，得到最大Take#与Shot总数
+            task_id = getattr(take_item, '_task_id', '')
+            if task_id in self._dict_shotname:
+                (max_take_no, shot_count) = self._dict_shotname[task_id]
                 shot_count = shot_count + 1
                 
-                if take_item._take_no > max_take_no:
-                    self._dict_shotname[take_item._shot_name] = (take_item._take_no, shot_count)
+                # 从take_name中提取take_no，或者使用默认值1
+                take_no = 1
+                if hasattr(take_item, '_take_name') and take_item._take_name:
+                    # 尝试从take_name中提取take_no
+                    parts = take_item._take_name.split('_')
+                    if len(parts) >= 3:
+                        try:
+                            take_no = int(parts[-1])  # 最后一部分是episode_id，可以作为take_no
+                        except ValueError:
+                            take_no = 1
+                
+                if take_no > max_take_no:
+                    self._dict_shotname[task_id] = (take_no, shot_count)
             else:
-                self._dict_shotname[take_item._shot_name] = (take_item._take_no, 1)
+                # 从take_name中提取take_no，或者使用默认值1
+                take_no = 1
+                if hasattr(take_item, '_take_name') and take_item._take_name:
+                    # 尝试从take_name中提取take_no
+                    parts = take_item._take_name.split('_')
+                    if len(parts) >= 3:
+                        try:
+                            take_no = int(parts[-1])  # 最后一部分是episode_id，可以作为take_no
+                        except ValueError:
+                            take_no = 1
+                
+                self._dict_shotname[task_id] = (take_no, 1)
 
     def take_info(self, shot_name):
         if shot_name in self._dict_shotname:

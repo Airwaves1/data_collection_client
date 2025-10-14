@@ -21,6 +21,7 @@ import mainwnd_rc
 
 from dialog_takeitem import TakeItemDialog
 from dialog_fbxmerge import FbxMergeDialog
+from login_dialog import LoginDialog
 
 import mylogger
 from factory_widget import QtWidgetFactory
@@ -29,9 +30,8 @@ from dict_shotname import DictShotName
 from task_list_widget import TaskListWidget
 from task_property_widget import TaskPropertyPanel
 from service.db_controller import DBController
+from export_manager import ExportManager
 from uuid import uuid4
-from PySide6.QtWidgets import QProgressDialog
-from PySide6.QtCore import QCoreApplication
 
 # 录制按钮长宽
 RecordButtonWidth = 220
@@ -111,8 +111,22 @@ class MainWindow(QMainWindow):
         self.db_controller = DBController()
         self.current_collector: dict | None = None
         
+        # 用户认证状态
+        self.is_logged_in = False
+        
+        # 导出管理器
+        self.export_manager = ExportManager(self.db_controller, self)
+        
         # 数据库自动保存配置
         self.auto_save_to_db = True  # 默认开启自动保存到数据库
+        
+        # 导出完成等待状态
+        self._waiting_for_export = False
+        self._export_target_path = ""
+        
+        # 下载队列管理
+        self._download_queue = []  # 等待下载的take_name列表
+        self._is_downloading = False  # 当前是否正在下载
 
         self.mod_merge_fbx = None
         self.func_merge_fbx = None
@@ -182,6 +196,36 @@ class MainWindow(QMainWindow):
         self.highlight_signal.connect(self.highLightNoteInfo)
 
         mylogger.info('MainWindow launch.')
+        
+        # 显示登录对话框
+        self.show_login_dialog()
+
+    def show_login_dialog(self):
+        """显示登录对话框"""
+        login_dialog = LoginDialog(self)
+        login_dialog.login_success.connect(self.on_login_success)
+        
+        # 如果用户取消登录，关闭应用程序
+        if login_dialog.exec_() != QDialog.Accepted:
+            self.close()
+            
+    def on_login_success(self, user_info):
+        """登录成功处理"""
+        self.current_collector = user_info
+        self.is_logged_in = True
+        
+        # 更新状态栏显示当前用户
+        self.statusBar().showMessage(f"当前用户: {user_info.get('collector_name', 'Unknown')}")
+        
+        # 可以在这里添加其他登录后的初始化操作
+        mylogger.info(f"用户登录成功: {user_info.get('username', 'Unknown')}")
+        
+    def check_login_status(self):
+        """检查登录状态"""
+        if not self.is_logged_in:
+            QMessageBox.warning(self, "未登录", "请先登录后再进行操作")
+            return False
+        return True
 
     # 当主窗口关闭，子窗口也关闭
     def closeEvent(self, event):
@@ -444,13 +488,13 @@ class MainWindow(QMainWindow):
             self._edt_notes.scrollToItem(self._edt_notes.item(row))
 
     def updateTakeRow(self, row, take_item):
-        # 任务ID (shot_name)
-        twItem = QTableWidgetItem(take_item._shot_name)
+        # 任务ID
+        twItem = QTableWidgetItem(take_item._task_id)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 0, twItem)
 
-        # 任务名称 (take_desc)
-        twItem = QTableWidgetItem(take_item._take_desc)
+        # 任务名称
+        twItem = QTableWidgetItem(take_item._task_name)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 1, twItem)
         
@@ -471,7 +515,7 @@ class MainWindow(QMainWindow):
         
         # 状态下拉框
         status_combo = QComboBox()
-        status_combo.addItems(["待审核", "已接受", "已拒绝", "NG"])
+        status_combo.addItems(["待处理", "接受", "已拒绝", "NG"])
         
         # 根据当前状态设置选中项
         status_map = {
@@ -506,7 +550,7 @@ class MainWindow(QMainWindow):
                 # 更新TakeItem状态
                 take_item._task_status = new_status
                 
-                print(f"任务 {take_item._shot_name} 状态已更新为: {status_text} ({new_status})")
+                print(f"任务 {take_item._task_id} 状态已更新为: {status_text} ({new_status})")
                 
                 # 如果任务已保存到数据库，则更新数据库状态
                 if hasattr(take_item, '_task_id') and take_item._task_id:
@@ -618,240 +662,56 @@ class MainWindow(QMainWindow):
 
 
     def collect_file(self):
-        if self.mod_peel.show_harvest():
-            self._will_save = True
-
-    def export_file(self):
-        """从数据库导出TaskInfo到选定文件夹: task_info/<task_id>/<task_id>.json"""
-        # 选择导出根目录
-        export_dir = QFileDialog.getExistingDirectory(self, self.tr("选择导出文件夹"), self._open_folder or os.getcwd())
-        if not export_dir:
+        # 选择保存路径
+        from PySide6.QtWidgets import QFileDialog
+        path = QFileDialog.getExistingDirectory(self, "选择保存路径", self._open_folder)
+        if not path:
             return
         
-        root_dir = os.path.join(export_dir, 'task_info')
-        os.makedirs(root_dir, exist_ok=True)
+        # 检查是否有设备连接
+        has_connection, message = self.check_device_connection()
+        if not has_connection:
+            QMessageBox.warning(self, "设备连接检查", message)
+            return
         
-        # 获取任务列表（简化：假设后端提供列表接口或在客户端已有task_ids）
-        try:
-            # 目标：按业务任务ID(如367)导出。优先从当前会话的录制条目收集业务task_id（_shot_name）
-            business_task_ids = []
-            for take in self._takelist:
-                if getattr(take, '_shot_name', None):
-                    business_task_ids.append(str(take._shot_name))
-            # 去重
-            business_task_ids = list(dict.fromkeys(business_task_ids))
+        # 连接CMAvatar设备信号（如果还没有连接）
+        self.connect_avatar_signals()
+        
+        # 设置导出目标路径
+        self._export_target_path = path
+        
+        # 先调用设备的导出命令（路径为空，让设备自己处理）
+        self.mod_peel.command('Export', '')
+        
+        # 显示等待消息
+        self.statusBar().showMessage("等待设备导出完成...", 0)
+        
+        # 设置超时保护（30秒后如果还没收到回调，则停止等待）
+        if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
+            try:
+                self._export_timeout_timer.stop()
+            except Exception:
+                pass
+        else:
+            self._export_timeout_timer = QTimer(self)
+            self._export_timeout_timer.timeout.connect(self._on_export_timeout)
+        
+        # 30秒超时
+        self._export_timeout_timer.start(30000)
 
-            # 如果当前会话没有可用业务ID，则从后端读取所有TaskInfo并汇总其task_id
-            if not business_task_ids:
-                resp = self.db_controller.list_task_infos(limit=1000, offset=0) or []
-                if isinstance(resp, dict):
-                    items = resp.get('results', []) or []
-                elif isinstance(resp, list):
-                    items = resp
-                else:
-                    items = []
-                biz_set = []
-                for it in items:
-                    try:
-                        if isinstance(it, dict) and it.get('task_id'):
-                            biz_set.append(str(it.get('task_id')))
-                    except Exception:
-                        continue
-                business_task_ids = list(dict.fromkeys(biz_set))
-            
-            if not business_task_ids:
-                QMessageBox.information(self, self.tr("导出"), self.tr("没有可导出的任务"))
-                return
-            
-            exported = 0
-            # 简单进度条：按业务任务ID统计
-            total_tasks = len(business_task_ids)
-            progress = QProgressDialog(self.tr("正在导出 task_info..."), None, 0, total_tasks, self)
-            progress.setWindowTitle(self.tr("导出"))
-            progress.setCancelButton(None)
-            progress.setMinimumDuration(0)
-            progress.setValue(0)
+    def _on_export_timeout(self):
+        """导出超时处理"""
+        self.statusBar().showMessage("导出超时，尝试下载现有文件...", 3000)
+        # 超时后仍然尝试下载
+        if self.mod_peel.show_harvest_with_path(self._export_target_path):
+            self._will_save = True
+            self.statusBar().showMessage("下载完成", 3000)
+        else:
+            self.statusBar().showMessage("下载失败", 3000)
 
-            for idx, biz_id in enumerate(business_task_ids, start=1):
-                progress.setLabelText(self.tr(f"正在导出 task_info: {biz_id} ({idx}/{total_tasks})"))
-                progress.setValue(idx - 1)
-                QCoreApplication.processEvents()
-                # 从后端拉取全部TaskInfo并过滤出该业务ID的所有episode
-                resp = self.db_controller.list_task_infos(limit=2000, offset=0) or []
-                if isinstance(resp, dict):
-                    items = resp.get('results', []) or []
-                elif isinstance(resp, list):
-                    items = resp
-                else:
-                    items = []
-                matched = [it for it in items if isinstance(it, dict) and str(it.get('task_id')) == str(biz_id)]
-                if not matched:
-                    continue
-
-                export_array = []
-                for data in matched:
-                    export_array.append({
-                        "episode_id": int(data.get('episode_id') or data.get('id')),
-                        "label_info": {"action_config": data.get('action_config', [])},
-                        "task_name": data.get('task_name', ''),
-                        "init_scene_text": data.get('init_scene_text', '')
-                    })
-
-                # 写入 task_info/<biz_id>.json 为数组，包含所有episode
-                output_file = os.path.join(root_dir, f"{biz_id}.json")
-                with open(output_file, 'w', encoding='utf-8') as f:
-                    json.dump(export_array, f, ensure_ascii=False, indent=2)
-                exported += 1
-
-            progress.setValue(total_tasks)
-            
-            # task_info导出完成后，开始导出视频文件
-            self._export_video_files(export_dir, business_task_ids, exported)
-            
-        except Exception as e:
-            QMessageBox.warning(self, self.tr("导出失败"), self.tr(f"导出发生异常: {e}"))
-
-    def _export_video_files(self, export_dir, business_task_ids, task_info_count):
-        """导出视频文件到指定目录结构"""
-        try:
-            import shutil
-            import glob
-            
-            # 获取所有observations数据
-            observations_data = self.db_controller.list_observations(limit=2000, offset=0) or []
-            if not observations_data:
-                print("没有找到observations数据，跳过视频文件导出")
-                QMessageBox.information(self, self.tr("导出完成"), 
-                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
-                return
-            
-            # 检查observations数据格式
-            if not isinstance(observations_data, list):
-                print(f"observations数据格式错误: {type(observations_data)}")
-                QMessageBox.information(self, self.tr("导出完成"), 
-                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
-                return
-            
-            # 按task_id分组observations
-            observations_by_task = {}
-            for obs in observations_data:
-                # 检查obs是否为字典类型
-                if not isinstance(obs, dict):
-                    print(f"跳过非字典类型的observation数据: {type(obs)}")
-                    continue
-                    
-                # 通过task_info获取task_id
-                task_info_id = obs.get('task_info')
-                if task_info_id:
-                    # 获取对应的task_info
-                    task_info = self.db_controller.get_task(task_info_id)
-                    if task_info and isinstance(task_info, dict):
-                        biz_task_id = str(task_info.get('task_id', ''))
-                        if biz_task_id in business_task_ids:
-                            if biz_task_id not in observations_by_task:
-                                observations_by_task[biz_task_id] = []
-                            observations_by_task[biz_task_id].append(obs)
-            
-            if not observations_by_task:
-                print("没有找到匹配的observations数据，跳过视频文件导出")
-                QMessageBox.information(self, self.tr("导出完成"), 
-                    self.tr(f"已导出 {task_info_count} 个任务信息到: {export_dir}"))
-                return
-            
-            # 创建observations目录
-            observations_dir = os.path.join(export_dir, 'observations')
-            os.makedirs(observations_dir, exist_ok=True)
-            
-            # 计算总进度
-            total_episodes = sum(len(episodes) for episodes in observations_by_task.values())
-            progress = QProgressDialog(self.tr("正在导出视频文件..."), None, 0, total_episodes, self)
-            progress.setWindowTitle(self.tr("导出视频"))
-            progress.setCancelButton(None)
-            progress.setMinimumDuration(0)
-            progress.setValue(0)
-            
-            exported_episodes = 0
-            
-            for biz_task_id, episodes in observations_by_task.items():
-                # 创建task_id目录
-                task_dir = os.path.join(observations_dir, biz_task_id)
-                os.makedirs(task_dir, exist_ok=True)
-                
-                for episode in episodes:
-                    # 检查episode是否为字典类型
-                    if not isinstance(episode, dict):
-                        print(f"跳过非字典类型的episode数据: {type(episode)}")
-                        continue
-                        
-                    episode_id = str(episode.get('episode_id', ''))
-                    video_path = episode.get('video_path', '')
-                    depth_path = episode.get('depth_path', '')
-                    
-                    # 检查是否有有效的视频或深度路径
-                    has_video_files = video_path and os.path.exists(video_path)
-                    has_depth_files = depth_path and os.path.exists(depth_path)
-                    
-                    if not has_video_files and not has_depth_files:
-                        print(f"Episode {episode_id} 没有有效的视频或深度文件路径，跳过")
-                        continue
-                    
-                    # 创建episode_id目录
-                    episode_dir = os.path.join(task_dir, episode_id)
-                    videos_dir = os.path.join(episode_dir, 'videos')
-                    depth_dir = os.path.join(episode_dir, 'depth')
-                    os.makedirs(videos_dir, exist_ok=True)
-                    os.makedirs(depth_dir, exist_ok=True)
-                    
-                    # 更新进度
-                    exported_episodes += 1
-                    progress.setLabelText(self.tr(f"正在导出视频: {biz_task_id}/{episode_id} ({exported_episodes}/{total_episodes})"))
-                    progress.setValue(exported_episodes - 1)
-                    QCoreApplication.processEvents()
-                    
-                    # 复制视频文件
-                    if has_video_files:
-                        try:
-                            # 获取目录下所有文件
-                            video_dir = os.path.dirname(video_path)
-                            if os.path.exists(video_dir):
-                                video_files = glob.glob(os.path.join(video_dir, '*'))
-                                for file_path in video_files:
-                                    if os.path.isfile(file_path):
-                                        filename = os.path.basename(file_path)
-                                        dest_path = os.path.join(videos_dir, filename)
-                                        shutil.copy2(file_path, dest_path)
-                                        print(f"复制视频文件: {file_path} -> {dest_path}")
-                            else:
-                                print(f"视频目录不存在: {video_dir}")
-                        except Exception as e:
-                            print(f"复制视频文件失败: {e}")
-                    
-                    # 复制深度文件
-                    if has_depth_files:
-                        try:
-                            # 获取目录下所有文件
-                            depth_dir_path = os.path.dirname(depth_path)
-                            if os.path.exists(depth_dir_path):
-                                depth_files = glob.glob(os.path.join(depth_dir_path, '*'))
-                                for file_path in depth_files:
-                                    if os.path.isfile(file_path):
-                                        filename = os.path.basename(file_path)
-                                        dest_path = os.path.join(depth_dir, filename)
-                                        shutil.copy2(file_path, dest_path)
-                                        print(f"复制深度文件: {file_path} -> {dest_path}")
-                            else:
-                                print(f"深度目录不存在: {depth_dir_path}")
-                        except Exception as e:
-                            print(f"复制深度文件失败: {e}")
-            
-            progress.setValue(total_episodes)
-            
-            QMessageBox.information(self, self.tr("导出完成"), 
-                self.tr(f"已导出 {task_info_count} 个任务信息和 {exported_episodes} 个episode的视频文件到: {export_dir}"))
-            
-        except Exception as e:
-            print(f"导出视频文件失败: {e}")
-            QMessageBox.warning(self, self.tr("导出失败"), self.tr(f"导出视频文件失败: {e}"))
+    def export_file(self):
+        """从数据库导出TaskInfo到选定文件夹"""
+        self.export_manager.export_data(self._takelist, self._open_folder)
 
     def _export_task_data(self, task_id, takes):
         """导出单个任务的数据"""
@@ -930,9 +790,10 @@ class MainWindow(QMainWindow):
             task_info = self._get_task_info(task_id)
             
             # 获取当前采集者ID
-            collector_id = self.current_collector.get('id')
+            collector_id = self.current_collector.get('collector_id') or self.current_collector.get('id')
             if not collector_id:
                 print(f"保存任务 {task_id} 到数据库失败: 没有采集者ID")
+                print(f"当前采集者信息: {self.current_collector}")
                 return False
             
             saved_count = 0
@@ -952,24 +813,26 @@ class MainWindow(QMainWindow):
                 if not scene_text:
                     scene_text = f"Task {task_id}: {task_name_en}"
                 
-                # 保存到数据库（后端会自动生成episode_id），传入业务task_id
-                task_info_id = self.db_controller.save_full_episode(
-                    collector_id=collector_id,
-                    episode_id="",  # 后端自动生成
-                    task_id=str(task_id),
-                    task_name=task_name_en,
-                    init_scene_text=scene_text,
-                    action_config=action_config,
-                    task_status='pending'  # 默认为待审核状态
-                )
+                # 更新现有的TaskInfo记录，而不是创建新的
+                update_data = {
+                    'task_name': task_name_en,
+                    'init_scene_text': scene_text,
+                    'action_config': action_config,
+                    'task_status': 'pending'  # 默认为待审核状态
+                }
                 
-                if task_info_id:
+                result = self.db_controller.update_task_by_task_id(str(task_id), update_data)
+                
+                if result:
                     saved_count += 1
-                    # 将任务ID保存到TakeItem中，用于后续状态更新
-                    take_item._task_id = task_info_id
-                    print(f"成功保存任务 {task_id} episode {task_info_id} 到数据库 (ID: {task_info_id})")
+                    # 获取更新后的任务ID
+                    task_info_id = result.get('id')
+                    if task_info_id:
+                        # 将任务ID保存到TakeItem中，用于后续状态更新
+                        take_item._task_id = task_info_id
+                    print(f"成功更新任务 {task_id} 到数据库")
                 else:
-                    print(f"保存任务 {task_id} 到数据库失败")
+                    print(f"更新任务 {task_id} 到数据库失败")
             
             return saved_count > 0
             
@@ -1329,17 +1192,7 @@ class MainWindow(QMainWindow):
 
         self._view_menu = self.menuBar().addMenu(self.tr("&View"))
 
-        # 账号菜单（登录采集者）
-        self._account_menu = self.menuBar().addMenu(self.tr("&Account"))
-        self._login_act = QAction(self.tr("Login Collector"), self,
-                statusTip=self.tr("Login or register a collector"), triggered=self.login_collector)
-        self._account_menu.addAction(self._login_act)
-        
-        # 自动保存到数据库选项
-        self._auto_save_act = QAction(self.tr("Auto Save to Database"), self,
-                statusTip=self.tr("Automatically save recordings to database"), 
-                checkable=True, checked=True, triggered=self.toggle_auto_save)
-        self._account_menu.addAction(self._auto_save_act)
+        # 账户菜单已移除（登录改为启动时强制弹窗）
 
         self._publish_menu = self.menuBar().addMenu(self.tr("&Publish"))
         self._publish_menu.addAction(self._collect_file_act)
@@ -1360,114 +1213,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"自动保存到数据库: {status}", 2000)
         print(f"自动保存到数据库: {status}")
         
-    def login_collector(self):
-        """登录/注册采集者对话流程"""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLineEdit, QLabel
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(self.tr("登录采集者"))
-        layout = QVBoxLayout(dlg)
-
-        # 已有采集者选择
-        layout.addWidget(QLabel(self.tr("选择已有采集者:")))
-        cmb = QComboBox(dlg)
-        collectors = self.db_controller.list_collectors()
-        cmb.addItem(self.tr("-- 请选择 --"), None)
-        for c in collectors:
-            display = f"[{c.get('collector_id','')}] {c.get('collector_name','')}"
-            cmb.addItem(display, c)
-        layout.addWidget(cmb)
-
-        # 注册新采集者
-        layout.addWidget(QLabel(self.tr("或注册新采集者:")))
-        edt_org = QLineEdit(dlg); edt_org.setPlaceholderText(self.tr("组织"))
-        edt_cid = QLineEdit(dlg); edt_cid.setPlaceholderText(self.tr("采集者ID"))
-        edt_name = QLineEdit(dlg); edt_name.setPlaceholderText(self.tr("姓名"))
-        edt_target = QLineEdit(dlg); edt_target.setPlaceholderText(self.tr("目标客户(可选)"))
-        layout.addWidget(edt_org)
-        layout.addWidget(edt_cid)
-        layout.addWidget(edt_name)
-        layout.addWidget(edt_target)
-
-        btns = QHBoxLayout()
-        btn_ok = QPushButton(self.tr("确定"), dlg)
-        btn_cancel = QPushButton(self.tr("取消"), dlg)
-        btns.addWidget(btn_ok); btns.addWidget(btn_cancel)
-        layout.addLayout(btns)
-
-        def on_ok():
-            # 优先已有选择
-            data = cmb.currentData()
-            if data:
-                self.set_current_collector(data)
-                dlg.accept()
-                return
-            # 其次注册新用户
-            if edt_org.text().strip() and edt_cid.text().strip() and edt_name.text().strip():
-                new_id = self.db_controller.upsert_collector({
-                    "collector_organization": edt_org.text().strip(),
-                    "collector_id": edt_cid.text().strip(),
-                    "collector_name": edt_name.text().strip(),
-                    "target_customer": edt_target.text().strip() or None,
-                })
-                data = self.db_controller.get_collector(new_id)
-                self.set_current_collector(data)
-                dlg.accept()
-            else:
-                QMessageBox.warning(self, self.tr("提示"), self.tr("请选择采集者或填写完整的注册信息"))
-
-        btn_ok.clicked.connect(on_ok)
-        btn_cancel.clicked.connect(dlg.reject)
-
-        dlg.exec()
-
-    def set_current_collector(self, collector: dict):
-        """设置当前采集者并持久化到QSettings"""
-        self.current_collector = collector
-        # 状态栏显示
-        name = collector.get('collector_name','') if collector else self.tr("未登录采集者")
-        cid = collector.get('collector_id','') if collector else ''
-        self._collector_label.setText(self.tr("采集者: ") + f"{name}({cid})")
-
-        # 保存到设置
-        try:
-            self._appconfig._settings.setValue('CurrentCollectorJson', json.dumps(collector, ensure_ascii=False))
-        except Exception:
-            pass
-
-        # 依据当前状态重建账号菜单
-        self._rebuild_account_menu()
-
-    def _rebuild_account_menu(self):
-        """根据登录状态重建 Account 菜单"""
-        try:
-            self._account_menu.clear()
-        except Exception:
-            return
-        if self.current_collector:
-            # 显示信息与登出
-            info_text = self.tr("当前采集者: ") + f"{self.current_collector.get('collector_name','')} ({self.current_collector.get('collector_id','')})"
-            info_act = QAction(info_text, self)
-            info_act.setEnabled(False)
-            self._account_menu.addAction(info_act)
-
-            logout_act = QAction(self.tr("Logout"), self,
-                                 statusTip=self.tr("Logout current collector"), triggered=self._logout_collector)
-            self._account_menu.addAction(logout_act)
-        else:
-            login_act = QAction(self.tr("Login Collector"), self,
-                                statusTip=self.tr("Login or register a collector"), triggered=self.login_collector)
-            self._account_menu.addAction(login_act)
-
-    def _logout_collector(self):
-        """登出采集者"""
-        self.current_collector = None
-        try:
-            self._appconfig._settings.remove('CurrentCollectorJson')
-        except Exception:
-            pass
-        self._collector_label.setText(self.tr("未登录采集者"))
-        self._rebuild_account_menu()
+    # 账户菜单及相关流程已移除
 
     def create_tool_bars(self):
         self._file_tool_bar = self.addToolBar(self.tr("File"))
@@ -1796,7 +1542,7 @@ class MainWindow(QMainWindow):
         tips_content = """1. 点击录制会有三秒的准备时间。
 2. 左侧动作列表高亮后再进行操作。
 3. 完成一个动作后稍作停顿，等待下个动作列表高亮后操作。
-4.完成所有动作后，会自动结束录制。"""
+4. 完成所有动作后，会自动结束录制。"""
         self._lbl_recording_tips.setText(tips_content)
         
         vboxLayout.addWidget(self._lbl_recording_tips)
@@ -2108,11 +1854,214 @@ class MainWindow(QMainWindow):
         
         self.updateLabelTakeName()
 
+    def connect_avatar_signals(self):
+        """连接CMAvatar设备的信号"""
+        print(f"[DEBUG] connect_avatar_signals 被调用")
+        
+        # 从peel模块获取真正的设备对象
+        try:
+            # 使用主窗口已经导入的peel模块的DEVICES（DeviceCollection）
+            if hasattr(self.mod_peel, 'DEVICES') and self.mod_peel.DEVICES:
+                print(f"[DEBUG] 从mod_peel.DEVICES获取设备，数量: {len(self.mod_peel.DEVICES)}")
+                
+                # 查找CMAvatar设备（真正的Python设备对象）
+                avatar_devices = [d for d in self.mod_peel.DEVICES if d.device() == "CMAvatar"]
+                print(f"[DEBUG] 找到的CMAvatar设备数量: {len(avatar_devices)}")
+                
+                for avatar_device in avatar_devices:
+                    print(f"[DEBUG] 处理CMAvatar设备: {avatar_device.name}")
+                    print(f"[DEBUG] 设备类型: {type(avatar_device)}")
+                    if hasattr(avatar_device, 'export_completed'):
+                        try:
+                            # 断开之前的连接（如果有的话）
+                            avatar_device.export_completed.disconnect()
+                            print(f"[DEBUG] 断开之前的信号连接")
+                        except TypeError:
+                            # 如果没有连接过，会抛出TypeError，忽略即可
+                            print(f"[DEBUG] 没有之前的信号连接")
+                            pass
+                        
+                        # 连接新的信号
+                        avatar_device.export_completed.connect(self._on_avatar_export_completed)
+                        print(f"已连接CMAvatar设备信号: {avatar_device.name}")
+                        print(f"[DEBUG] 信号连接成功: {avatar_device.name}")
+                        print(f"[DEBUG] 设备对象: {avatar_device}")
+                        print(f"[DEBUG] 信号对象: {avatar_device.export_completed}")
+                    else:
+                        print(f"[ERROR] 设备 {avatar_device.name} 没有 export_completed 信号")
+            else:
+                print(f"[ERROR] mod_peel.DEVICES 为空或不存在")
+        except Exception as e:
+            print(f"[ERROR] 获取设备失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _on_avatar_export_completed(self, export_result, export_message, take_name):
+        """处理CMAvatar设备导出完成回调"""
+        print(f"[DEBUG] 收到导出完成回调: result={export_result}, message={export_message}, take_name={take_name}")
+        
+        if export_result and take_name:
+            # 停止超时定时器
+            if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
+                try:
+                    self._export_timeout_timer.stop()
+                    print(f"[DEBUG] 停止导出超时定时器")
+                except Exception as e:
+                    print(f"[DEBUG] 停止超时定时器失败: {e}")
+            
+            # 导出成功，添加到下载队列
+            print(f"[DEBUG] 导出完成，添加到下载队列: {take_name}")
+            self._download_queue.append(take_name)
+            
+            # 更新状态栏显示队列状态
+            queue_size = len(self._download_queue)
+            if self._is_downloading:
+                self.statusBar().showMessage(f"下载队列: {queue_size} 个任务等待中...", 0)
+            else:
+                self.statusBar().showMessage(f"导出完成，{queue_size} 个任务等待下载...", 0)
+            
+            # 如果当前没有在下载，开始处理队列
+            if not self._is_downloading:
+                self._process_download_queue()
+        else:
+            # 导出失败
+            self.statusBar().showMessage(f"导出失败: {export_message}", 3000)
+            print(f"[ERROR] 导出失败: {export_message}")
+            QMessageBox.warning(self, "导出失败", f"设备导出失败: {export_message}")
+
+    def _process_download_queue(self):
+        """处理下载队列"""
+        if not self._download_queue or self._is_downloading:
+            return
+        
+        # 从队列中取出第一个任务
+        take_name = self._download_queue.pop(0)
+        print(f"[DEBUG] 开始处理下载队列中的任务: {take_name}")
+        
+        # 设置下载状态
+        self._is_downloading = True
+        
+        # 更新状态栏
+        queue_size = len(self._download_queue)
+        if queue_size > 0:
+            self.statusBar().showMessage(f"正在下载: {take_name} (队列中还有 {queue_size} 个任务)...", 0)
+        else:
+            self.statusBar().showMessage(f"正在下载: {take_name}...", 0)
+        
+        # 开始下载
+        self._start_async_download(take_name)
+
+    def _start_async_download(self, take_name):
+        """异步启动下载，不阻塞UI"""
+        try:
+            print(f"[DEBUG] 开始异步下载: take_name={take_name}, path={self._export_target_path}")
+            
+            # 获取真正的CMAvatar设备对象（Python对象，有harvest方法）
+            harvest_devices = [d for d in self.mod_peel.DEVICES if d.device() == "CMAvatar"]
+            if len(harvest_devices) == 0:
+                self.statusBar().showMessage("没有找到CMAvatar设备", 3000)
+                return
+            
+            device = harvest_devices[0]
+            download_path = os.path.join(self._export_target_path, device.name)
+            
+            print(f"[DEBUG] 调用 device.harvest with download_path={download_path}, take_name={take_name}")
+            
+            # 创建下载线程，确保传递take_name参数
+            download_thread = device.harvest(download_path, take_name)
+            
+            # 连接信号
+            download_thread.all_done.connect(lambda: self._on_download_completed(take_name))
+            download_thread.tick.connect(self._on_download_progress)
+            download_thread.file_done.connect(self._on_file_downloaded)
+            download_thread.message.connect(self._on_download_message)
+            
+            # 启动下载线程
+            download_thread.start()
+            print(f"[DEBUG] 异步下载线程已启动: {take_name}")
+            
+        except Exception as e:
+            print(f"[ERROR] 启动异步下载失败: {e}")
+            self.statusBar().showMessage(f"启动下载失败: {e}", 3000)
+    
+    def _on_download_completed(self, take_name):
+        """下载完成回调"""
+        print(f"[DEBUG] 文件夹下载完成: {take_name}")
+        self._will_save = True
+        
+        # 重置下载状态
+        self._is_downloading = False
+        
+        # 更新状态栏
+        queue_size = len(self._download_queue)
+        if queue_size > 0:
+            self.statusBar().showMessage(f"下载完成: {take_name}，继续处理队列中的 {queue_size} 个任务...", 2000)
+            # 处理队列中的下一个任务
+            self._process_download_queue()
+        else:
+            self.statusBar().showMessage(f"所有下载任务完成: {take_name}", 3000)
+    
+    def _on_download_progress(self, progress):
+        """下载进度回调"""
+        progress_percent = int(progress * 100)
+        self.statusBar().showMessage(f"下载进度: {progress_percent}%", 0)
+    
+    def _on_file_downloaded(self, filename, status, error):
+        """单个文件下载完成回调"""
+        if status == 1:  # COPY_OK
+            print(f"[DEBUG] 文件下载成功: {filename}")
+        elif status == 0:  # COPY_FAIL
+            print(f"[ERROR] 文件下载失败: {filename}, 错误: {error}")
+        elif status == 2:  # COPY_SKIP
+            print(f"[DEBUG] 文件跳过: {filename}")
+    
+    def _on_download_message(self, message):
+        """下载消息回调"""
+        print(f"[DEBUG] 下载消息: {message}")
+
+    def check_device_connection(self):
+        """检查CMAvatar设备连接状态"""
+        if not self._all_device:
+            return False, "没有添加CMAvatar设备"
+        
+        # 调试信息：打印所有设备信息
+        print(f"[DEBUG] 总设备数量: {len(self._all_device)}")
+        for i, d in enumerate(self._all_device):
+            print(f"[DEBUG] 设备 {i}: name={d.name}, type={type(d)}, status={getattr(d, 'status', 'N/A')}")
+        
+        # 通过设备名称识别CMAvatar设备
+        avatar_devices = [d for d in self._all_device if d.name == "CMAvatar"]
+        
+        print(f"[DEBUG] 找到的CMAvatar设备数量: {len(avatar_devices)}")
+        
+        if not avatar_devices:
+            return False, "没有找到CMAvatar设备"
+        
+        avatar_device = avatar_devices[0]  # 只使用第一个CMAvatar设备
+        
+        print(f"[DEBUG] 选择的CMAvatar设备: name={avatar_device.name}, status={getattr(avatar_device, 'status', 'N/A')}")
+        
+        # 检查设备状态
+        if hasattr(avatar_device, 'status'):
+            device_status = avatar_device.status
+            if device_status == "ONLINE":
+                return True, f"CMAvatar设备在线: {avatar_device.name}"
+            else:
+                return False, f"CMAvatar设备离线: {avatar_device.name} (状态: {device_status})"
+        
+        return False, "无法获取CMAvatar设备状态"
+
     # 录制开始/停止
     def record_clicked(self):
         # 检查是否有选择任务
         if not self._edt_shotName.text().strip():
             QMessageBox.warning(self, "提示", "请先选择一个任务")
+            return
+        
+        # 检查设备连接状态
+        has_connection, message = self.check_device_connection()
+        if not has_connection:
+            QMessageBox.warning(self, "设备连接检查", message)
             return
             
         if self._recording:
@@ -2160,14 +2109,14 @@ class MainWindow(QMainWindow):
             self.highLightNoteInfo(-1)
             self.save(True)
         else:
-            #未录制 - 先开始倒计时
+            #未录制 - 开始倒计时
+            shot_name = self._edt_shotName.text()
+            take_no = 1
             self.start_countdown(3, "准备开始录制")
             # 禁用录制按钮防止重复点击
             self._btn_record.setEnabled(False)
             # 注意：计时器在倒计时结束后才启动，不在这里启动
             # 更新索引 - 使用当前任务信息
-            shot_name = self._edt_shotName.text()
-            take_no = 1
             self._dict_shotname.add_shot_with_take(shot_name, take_no)
             self.update_shotlist()
         self._will_save = True
@@ -2221,7 +2170,7 @@ class MainWindow(QMainWindow):
             row = self._table_takelist.indexAt(sender.pos()).row()
             #self._table_takelist.setItem(row, 6, QTableWidgetItem(sender.currentText()))
             curTake = self._takelist[row]
-            curTake._eval = sender.currentText()
+            # 评分功能已移除
             self._will_save = True
 
         # self._table_takelist.setItem(lastRow, 5, QTableWidgetItem(str(take_last._due.seconds) + ' sec'))
@@ -2311,14 +2260,66 @@ class MainWindow(QMainWindow):
         
         # 开始实际录制
         shot_name = self._edt_shotName.text()
-        take_no = 1  # 固定为1，不再使用拍摄次数
-        # 仅使用录制ID，不依赖名称
+        take_no = 1  # 固定为1
         record_id = len(self._takelist) + 1
+
+        # 在开始录制前：从任务列表获取真实任务名称，创建后端 TaskInfo 并从数据库读取 task_name 与 episode_id
+        episode_id_str = ""
+        db_task_name = ""
+        
+        # 从任务列表组件获取真实的任务名称
+        real_task_name = ""
+        try:
+            if hasattr(self, '_taskListWidget') and self._taskListWidget:
+                task = self._taskListWidget.data_manager.get_task_by_id(shot_name)
+                if task:
+                    real_task_name = task.task_name_en or task.task_name_cn or shot_name
+                else:
+                    real_task_name = shot_name
+            else:
+                real_task_name = shot_name
+        except Exception as e:
+            real_task_name = shot_name
+        
+        # 在录制开始时保存到数据库，生成episode_id
+        try:
+            collector_id = 0
+            if self.current_collector and isinstance(self.current_collector, dict):
+                # 兼容登录返回结构：可能是 { 'collector_id': int, 'username': ... }
+                collector_id = self.current_collector.get('collector_id') or self.current_collector.get('id') or 0
+            # 使用业务 task_id 为 shot_name，task_name 使用真实的任务名称
+            action_config = []
+            init_scene_text = self._edt_desc.text() if hasattr(self, '_edt_desc') else ""
+            task_status = 'pending'
+            task_info_id = self.db_controller.save_full_episode(int(collector_id or 0), "", shot_name, real_task_name, init_scene_text, action_config, task_status)
+            # 立即查询数据库，获取真实的 task_name 与 episode_id
+            task_info = self.db_controller.get_task_info_by_task_id(shot_name)
+            if task_info:
+                # 后端视图按约定会返回包含 task_name 与 episode_id 的序列化数据
+                db_task_name = str(task_info.get('task_name') or real_task_name)
+                episode_id_val = task_info.get('episode_id')
+                if episode_id_val is not None:
+                    episode_id_str = str(episode_id_val)
+        except Exception as e:
+            # 若后端创建失败，不阻塞录制，仅回退使用空episode_id
+            episode_id_str = ""
+            db_task_name = real_task_name
+
+        # 创建TakeItem来生成take_name
+        temp_take_item = TakeItem(
+            task_id=shot_name,
+            task_name=db_task_name or real_task_name,
+            episode_id=episode_id_str
+        )
+        
+        # 使用TakeItem的take_name作为录制参数
+        take_name = temp_take_item._take_name
+
         # for unreal（如仍需）
         self.mod_peel.command('shotName', shot_name)
         # common command
         self.mod_peel.command('takeNumber', take_no)
-        self.mod_peel.command('record', str(record_id))
+        self.mod_peel.command('record', take_name)
         # 不再显示标题标签，保持原有样式调用安全
         self._btn_record.setText('00:00:00')
         
@@ -2335,12 +2336,16 @@ class MainWindow(QMainWindow):
 
         strDesc = self._edt_desc.text()
         strNotes = '\n'.join(self.get_notes_text())
-        takeItem = TakeItem(shot_name, 
-                            take_no, 
-                            "",
-                            strDesc, 
-                            strNotes,
-                            record_id=record_id)
+        
+        # 使用新的构造函数创建TakeItem
+        takeItem = TakeItem(
+            task_id=shot_name,
+            task_name=db_task_name or real_task_name,
+            episode_id=episode_id_str,
+            take_desc=strDesc,
+            take_note=strNotes,
+            record_id=record_id
+        )
         
         self._takelist.append(takeItem)
 
@@ -2431,7 +2436,7 @@ class MainWindow(QMainWindow):
             
             # 获取最后一个录制的take
             last_take = self._takelist[-1]
-            task_id = last_take._shot_name
+            task_id = last_take._task_id
             
             # 检查是否有当前采集者
             if not self.current_collector:
@@ -2534,6 +2539,9 @@ class MainWindow(QMainWindow):
                 'address': d.address,
                 'status': d.status
             })
+        
+        # 连接CMAvatar设备的信号
+        self.connect_avatar_signals()
 
     def updateDevice(self, updatedDevice):
         row = 0

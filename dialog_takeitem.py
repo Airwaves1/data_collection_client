@@ -21,27 +21,22 @@ class TakeItemDialog(QtWidgets.QDialog):
 
         # 创建 QGridLayout
         gridLayout = QGridLayout()
-        lblShotName = QLabel(self.tr("Shot Name:"))
-        gridLayout.addWidget(lblShotName, 0, 0)
-        self._edt_shotName = QtWidgetFactory.create_QLineEdit(self._takeItem._shot_name)
-        self._edt_shotName.setMaxLength(app_const.Max_Shot_Name)
+        lblTaskId = QLabel(self.tr("Task ID:"))
+        gridLayout.addWidget(lblTaskId, 0, 0)
+        self._edt_taskId = QtWidgetFactory.create_QLineEdit(self._takeItem._task_id)
+        self._edt_taskId.setMaxLength(app_const.Max_Shot_Name)
         # 设置半角字符验证器
         reg_half = QRegularExpression(app_const.Regular_Char_Half)
         validator_half = QRegularExpressionValidator(self)
         validator_half.setRegularExpression(reg_half)
-        self._edt_shotName.setValidator(validator_half)
-        gridLayout.addWidget(self._edt_shotName, 0, 1)
+        self._edt_taskId.setValidator(validator_half)
+        gridLayout.addWidget(self._edt_taskId, 0, 1)
 
-        lblTakeName = QLabel(self.tr("Take#:"))
-        gridLayout.addWidget(lblTakeName, 1, 0)
-        self._edt_takeNo = QtWidgetFactory.create_QLineEdit(str(self._takeItem._take_no))
-        self._edt_takeNo.setMaxLength(app_const.Max_Take_No)
-        # 设置整数验证器
-        reg_number = QRegularExpression(app_const.Regular_Number)
-        validator = QRegularExpressionValidator(self)
-        validator.setRegularExpression(reg_number)
-        self._edt_takeNo.setValidator(validator)
-        gridLayout.addWidget(self._edt_takeNo, 1, 1)
+        lblTaskName = QLabel(self.tr("Task Name:"))
+        gridLayout.addWidget(lblTaskName, 1, 0)
+        self._edt_taskName = QtWidgetFactory.create_QLineEdit(self._takeItem._task_name)
+        self._edt_taskName.setMaxLength(app_const.Max_Shot_Name)
+        gridLayout.addWidget(self._edt_taskName, 1, 1)
 
         lblDesc = QLabel(self.tr("Description:"))
         gridLayout.addWidget(lblDesc, 2, 0)
@@ -72,10 +67,7 @@ class TakeItemDialog(QtWidgets.QDialog):
         hBoxRecordTime.addWidget(self._edt_end_time)
         gridLayout.addLayout(hBoxRecordTime, 4, 1)
 
-        gridLayout.addWidget(QLabel(self.tr("Grade:")), 5, 0)
-        self._cmb_eval = QtWidgetFactory.create_QComboBox(app_const.ComboBox_Eval_Default, takeItem._eval, app_css.SheetStyle_Combo_All)
-        gridLayout.addWidget(self._cmb_eval, 5, 1)
-        # self.cmbEval.setCurrentText(takeItem._eval)
+        # 评分功能已移除
         gridLayout.setRowStretch(2, 1)
         gridLayout.setRowStretch(3, 3)
         vBoxLayout.addLayout(gridLayout)
@@ -110,15 +102,14 @@ class TakeItemDialog(QtWidgets.QDialog):
             self._takeItem._take_name = new_takename
             self._modify = True
             
-        # shot name
-        if self._takeItem._shot_name != self._edt_shotName.text():
-            self._takeItem._shot_name = self._edt_shotName.text()
+        # Task ID
+        if self._takeItem._task_id != self._edt_taskId.text():
+            self._takeItem._task_id = self._edt_taskId.text()
             self._modify = True
 
-        # take#
-        takeNo = int(self._edt_takeNo.text())
-        if self._takeItem._take_no != takeNo:
-            self._takeItem._take_no = takeNo
+        # Task Name
+        if self._takeItem._task_name != self._edt_taskName.text():
+            self._takeItem._task_name = self._edt_taskName.text()
             self._modify = True
 
         # 描述
@@ -131,10 +122,9 @@ class TakeItemDialog(QtWidgets.QDialog):
             self._takeItem._take_notes = self._edt_notes.toPlainText()
             self._modify = True
 
-        # 评分
-        if self._takeItem._eval != self._cmb_eval.currentText():
-            self._takeItem._eval = self._cmb_eval.currentText()
-            self._modify = True
+        # 更新take_name
+        if self._modify:
+            self._takeItem._generate_take_name()
 
         self.accept()
 

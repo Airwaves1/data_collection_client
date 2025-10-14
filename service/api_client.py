@@ -85,6 +85,17 @@ class DataCollectionAPIClient:
         result = self._make_request('GET', endpoint, params=params)
         return result if result else []
     
+    def register_collector(self, collector_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """用户注册"""
+        endpoint = "collectors/register/"
+        return self._make_request('POST', endpoint, collector_data)
+    
+    def login_collector(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        """用户登录"""
+        endpoint = "collectors/login/"
+        data = {'username': username, 'password': password}
+        return self._make_request('POST', endpoint, data)
+    
     # -------- task_info API --------
     def create_task_info(self, task: Dict[str, Any]) -> Optional[int]:
         """创建任务信息"""
@@ -102,6 +113,12 @@ class DataCollectionAPIClient:
         """根据episode_id获取任务信息"""
         endpoint = "tasks/by_episode/"
         params = {'episode_id': episode_id}
+        return self._make_request('GET', endpoint, params=params)
+    
+    def get_task_info_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """根据业务task_id获取任务信息"""
+        endpoint = "tasks/by_task_id/"
+        params = {'task_id': task_id}
         return self._make_request('GET', endpoint, params=params)
     
     def list_tasks_by_collector(self, collector_id: int, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
@@ -189,6 +206,12 @@ class DataCollectionAPIClient:
         data = {'task_status': task_status}
         result = self._make_request('PATCH', endpoint, data)
         return result is not None
+    
+    def update_task_by_task_id(self, task_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """根据业务task_id更新任务信息"""
+        endpoint = "tasks/update_by_task_id/"
+        data = {'task_id': task_id, **task_data}
+        return self._make_request('PATCH', endpoint, data)
 
     # -------- 读取 API --------
     def list_task_infos(self, limit: int = 500, offset: int = 0):

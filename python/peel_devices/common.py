@@ -12,5 +12,6 @@ cmd_rep_record_start = '/control/record/result'
 cmd_rep_record_stop = '/control/record/stop'
 cmd_rep_takepath = '/control/record/takefullpath'
 cmd_rep_record_stage = '/control/record/stage'
+cmd_rep_exportFinish = '/control/exportFinish'
 
 timeout_heartbeat = 8000
