@@ -10,6 +10,7 @@ from PySide6.QtGui import QFont, QIcon
 import app_css
 from factory_widget import QtWidgetFactory
 from service.db_controller import DBController
+from PySide6.QtCore import QSettings
 
 
 class LoginDialog(QDialog):
@@ -60,6 +61,10 @@ class LoginDialog(QDialog):
         # 注册选项卡
         self.register_tab = self.create_register_tab()
         self.tab_widget.addTab(self.register_tab, "注册")
+
+        # 服务器设置选项卡
+        self.server_tab = self.create_server_tab()
+        self.tab_widget.addTab(self.server_tab, "服务器设置")
         
         layout.addWidget(self.tab_widget)
         
@@ -162,15 +167,56 @@ class LoginDialog(QDialog):
         
         tab.setLayout(layout)
         return tab
+
+    def create_server_tab(self):
+        """创建服务器设置选项卡"""
+        tab = QWidget()
+        layout = QFormLayout()
+        layout.setFormAlignment(Qt.AlignTop)
+        layout.setLabelAlignment(Qt.AlignRight)
+        layout.setContentsMargins(6, 8, 6, 8)
+        layout.setHorizontalSpacing(16)
+        layout.setVerticalSpacing(10)
+
+        settings = QSettings("CHINGMU", "CMCapture")
+        server_host = str(settings.value("ServerHost", "localhost"))
+        server_port = str(settings.value("ServerPort", "8000"))
+        api_prefix = str(settings.value("ServerApiPrefix", "/api"))
+
+        self.server_host = QtWidgetFactory.create_QLineEdit(server_host)
+        self.server_port = QtWidgetFactory.create_QLineEdit(server_port)
+        self.server_api_prefix = QtWidgetFactory.create_QLineEdit(api_prefix)
+
+        self.server_host.setPlaceholderText("例如: 192.168.1.100 或 localhost")
+        self.server_port.setPlaceholderText("例如: 8000")
+        self.server_api_prefix.setPlaceholderText("例如: /api")
+
+        layout.addRow("服务器地址:", self.server_host)
+        layout.addRow("服务器端口:", self.server_port)
+        layout.addRow("API前缀:", self.server_api_prefix)
+
+        # 保存按钮
+        btn_layout = QHBoxLayout()
+        btn_save = QtWidgetFactory.create_QPushButton("保存设置", app_css.SheetStyle_PushButton, self.save_server_settings)
+        btn_layout.addStretch(1)
+        btn_layout.addWidget(btn_save)
+        layout.addRow("", btn_layout)
+
+        tab.setLayout(layout)
+        return tab
         
     def on_tab_changed(self, index):
         """选项卡切换时的处理"""
-        if index == 0:  # 登录选项卡
+        # 登录页显示“登录”按钮；注册页显示“注册”按钮；服务器设置页隐藏两者
+        if index == 0:
             self.login_button.setVisible(True)
             self.register_button.setVisible(False)
-        else:  # 注册选项卡
+        elif index == 1:
             self.login_button.setVisible(False)
             self.register_button.setVisible(True)
+        else:
+            self.login_button.setVisible(False)
+            self.register_button.setVisible(False)
             
     def login(self):
         """处理登录"""
@@ -244,3 +290,27 @@ class LoginDialog(QDialog):
                 QMessageBox.warning(self, "注册失败", error_msg)
         except Exception as e:
             QMessageBox.warning(self, "注册失败", f"注册过程中发生错误: {str(e)}")
+
+    def save_server_settings(self):
+        """保存服务器地址与端口配置"""
+        host = self.server_host.text().strip() if hasattr(self, 'server_host') else "localhost"
+        port = self.server_port.text().strip() if hasattr(self, 'server_port') else "8000"
+        prefix = self.server_api_prefix.text().strip() if hasattr(self, 'server_api_prefix') else "/api"
+
+        if not host:
+            QMessageBox.warning(self, "参数错误", "服务器地址不能为空")
+            return
+        if not port.isdigit():
+            QMessageBox.warning(self, "参数错误", "服务器端口必须是数字")
+            return
+        if not prefix:
+            prefix = "/api"
+        if not prefix.startswith("/"):
+            prefix = "/" + prefix
+
+        settings = QSettings("CHINGMU", "CMCapture")
+        settings.setValue("ServerHost", host)
+        settings.setValue("ServerPort", port)
+        settings.setValue("ServerApiPrefix", prefix)
+
+        QMessageBox.information(self, "保存成功", f"已保存服务器设置:\n{host}:{port}{prefix}")

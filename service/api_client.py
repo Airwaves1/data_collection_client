@@ -4,12 +4,31 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from PySide6.QtCore import QSettings
 
 
 class DataCollectionAPIClient:
     """数据采集API客户端 - 封装HTTP请求"""
     
     def __init__(self, base_url: str = "http://localhost:8000/api", timeout: int = 30, max_retries: int = 3):
+        # 读取持久化的服务器配置（若存在）
+        try:
+            settings = QSettings("CHINGMU", "CMCapture")
+            host = settings.value("ServerHost", "localhost")
+            port = str(settings.value("ServerPort", "8000"))
+            api_prefix = settings.value("ServerApiPrefix", "/api")
+            custom_base = settings.value("ServerBaseURL", "")
+            if custom_base:
+                base_url = str(custom_base)
+            else:
+                # 规范化前缀
+                if not api_prefix.startswith("/"):
+                    api_prefix = "/" + api_prefix
+                base_url = f"http://{host}:{port}{api_prefix}"
+        except Exception:
+            # 保底使用传入默认
+            pass
+
         self.base_url = base_url
         self.timeout = timeout
         self.max_retries = max_retries
@@ -18,6 +37,11 @@ class DataCollectionAPIClient:
             'Content-Type': 'application/json',
             'Accept': 'application/json'
         })
+
+    def set_base_url(self, base_url: str):
+        """运行时更新服务端地址（不持久化）。"""
+        if base_url:
+            self.base_url = base_url
     
     def _make_request(self, method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Optional[Dict]:
         """发送HTTP请求，包含重试机制"""

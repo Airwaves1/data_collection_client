@@ -39,7 +39,7 @@ class BaseDeviceWidget(QtWidgets.QWidget):
 
 class SimpleDeviceWidget(BaseDeviceWidget):
     """ A basic dialog for a device that has a name and an optional IP argument """
-    def __init__(self, settings, title, has_host, has_port, has_remotetool_port, has_listen_ip, has_listen_port):
+    def __init__(self, settings, title, has_host, has_port, has_remotetool_port, has_listen_ip, has_listen_port, has_fileservice_port=False):
         super(SimpleDeviceWidget, self).__init__(settings)
         self.form_layout = QtWidgets.QFormLayout()
         self.title = title
@@ -53,6 +53,7 @@ class SimpleDeviceWidget(BaseDeviceWidget):
         self.host = None
         self.port = None
         self.remotetool_port = None
+        self.fileservice_port = None
 
         self.listen_ip = None
         self.listen_port = None
@@ -69,6 +70,10 @@ class SimpleDeviceWidget(BaseDeviceWidget):
         if has_remotetool_port:
             self.remotetool_port = QtWidgetFactory.create_QLineEdit_port(settings.value(title + "RemoteToolPort", ""))
             self.form_layout.addRow(self.tr("RemoteTool Port"), self.remotetool_port)
+
+        if has_fileservice_port:
+            self.fileservice_port = QtWidgetFactory.create_QLineEdit_port(settings.value(title + "FileservicePort", "8080"))
+            self.form_layout.addRow(self.tr("Fileservice Port"), self.fileservice_port)
 
         if has_listen_ip:
             self.listen_ip = QtWidgetFactory.create_QComboBox_IP(settings.value(title + "ListenIp", self.tr("--all--")))
@@ -92,6 +97,9 @@ class SimpleDeviceWidget(BaseDeviceWidget):
 
         if self.remotetool_port is not None:
             self.remotetool_port.setText(str(device.remotetool_port))
+
+        if self.fileservice_port is not None:
+            self.fileservice_port.setText(str(device.fileservice_port))
 
         if self.listen_ip is not None:
             self.listen_ip.setCurrentText(device.listen_ip)
@@ -129,6 +137,13 @@ class SimpleDeviceWidget(BaseDeviceWidget):
                 data['remotetool_port'] = int(self.remotetool_port.text())
             except ValueError as e:
                 QtWidgets.QMessageBox.warning(self, self.tr("Error"), self.tr("Invalid remote tool port"))
+                return False
+
+        if self.fileservice_port is not None:
+            try:
+                data['fileservice_port'] = int(self.fileservice_port.text())
+            except ValueError as e:
+                QtWidgets.QMessageBox.warning(self, self.tr("Error"), self.tr("Invalid fileservice port"))
                 return False
 
         if self.listen_ip is not None:
@@ -195,6 +210,18 @@ class SimpleDeviceWidget(BaseDeviceWidget):
                 return False
 
             self.settings.setValue(self.title + "RemoteToolPort", remotetool_port_text)
+        
+        if self.fileservice_port is not None:
+            fileservice_port_text = self.fileservice_port.text().strip()
+            if fileservice_port_text is None or len(fileservice_port_text) == 0:
+                QMessageBox.warning(self, self.tr("Add device"), self.tr("Fileservice port can't empty."))
+                return False
+            
+            if not device_util.check_ip_port(fileservice_port_text):
+                QMessageBox.warning(self, self.tr("Add device"), self.tr("Fileservice port is invaild. Range by 1~65535"))
+                return False
+
+            self.settings.setValue(self.title + "FileservicePort", fileservice_port_text)
         
         # no need check.
         if self.listen_ip is not None:

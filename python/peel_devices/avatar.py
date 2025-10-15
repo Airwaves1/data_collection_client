@@ -48,6 +48,9 @@ class AddAvatarWidget(BaseDeviceWidget):
         self.remotetool_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMAvatarRemoteToolPort", str(defualt_remotetool_port)))
         form_layout.addRow(self.tr("RemoteTool Port"), self.remotetool_port)
 
+        self.fileservice_port = QtWidgetFactory.create_QLineEdit_port(settings.value("CMAvatarFileservicePort", "8080"))
+        form_layout.addRow(self.tr("Fileservice Port"), self.fileservice_port)
+
         self.listen_ip = QtWidgetFactory.create_QComboBox_IP_Editable(settings.value("CMAvatarListenIp", self.tr("--all--")))
         form_layout.addRow(self.tr("Listen IP"), self.listen_ip)
 
@@ -62,6 +65,7 @@ class AddAvatarWidget(BaseDeviceWidget):
         self.device_ip.setText(device.device_ip)
         self.device_port.setText(str(device.device_port))
         self.remotetool_port.setText(str(device.remotetool_port))
+        self.fileservice_port.setText(str(device.fileservice_port))
         self.listen_ip.setCurrentText(device.listen_ip)
         self.listen_port.setText(str(device.listen_port))
 
@@ -72,6 +76,7 @@ class AddAvatarWidget(BaseDeviceWidget):
             device.device_ip = self.device_ip.text()
             device.device_port = int(self.device_port.text())
             device.remotetool_port = int(self.remotetool_port.text())
+            device.fileservice_port = int(self.fileservice_port.text())
             device.listen_ip = self.listen_ip.ip()
             device.listen_port = int(self.listen_port.text())
             device.start_services()
@@ -114,6 +119,15 @@ class AddAvatarWidget(BaseDeviceWidget):
             QMessageBox.warning(self, self.tr("Add device"), self.tr("RemoteTool port is invaild. Range by 1~65535"))
             return False
 
+        fileservice_port_text = self.fileservice_port.text().strip()
+        if fileservice_port_text is None or len(fileservice_port_text) == 0:
+            QMessageBox.warning(self, self.tr("Add device"), self.tr("Fileservice port can't empty."))
+            return False
+        
+        if not device_util.check_ip_port(fileservice_port_text):
+            QMessageBox.warning(self, self.tr("Add device"), self.tr("Fileservice port is invaild. Range by 1~65535"))
+            return False
+
         # no need check.
         listen_ip_text = self.listen_ip.currentText()
         
@@ -131,6 +145,7 @@ class AddAvatarWidget(BaseDeviceWidget):
         self.settings.setValue("CMAvatarIp", device_ip_text)
         self.settings.setValue("CMAvatarPort", device_port_text)
         self.settings.setValue("CMAvatarRemoteToolPort", remotetool_port_text)
+        self.settings.setValue("CMAvatarFileservicePort", fileservice_port_text)
         self.settings.setValue("CMAvatarListenIp", listen_ip_text)
         self.settings.setValue("CMAvatarListenPort", listen_port_text)
 
@@ -140,9 +155,7 @@ class AddAvatarWidget(BaseDeviceWidget):
 class CMAvatar(PeelDeviceBase):
 
     # 定义信号
-    auto_stop_requested = Signal()
-    export_completed = Signal(bool, str, str)  # export_result, export_message, take_name
-    file_list_received = Signal(list)  # file_list
+    export_completed = Signal(bool, str, str, list)  # export_result, export_message, take_name, file_paths
 
     def __init__(self,
                  name,
@@ -151,6 +164,7 @@ class CMAvatar(PeelDeviceBase):
                  remotetool_port = defualt_remotetool_port,
                  listen_ip=default_listener_ip,
                  listen_port=default_listener_port,
+                 fileservice_port=8080,
                  takes=None):
 
         super(CMAvatar, self).__init__(name)
@@ -159,6 +173,7 @@ class CMAvatar(PeelDeviceBase):
         self.remotetool_port = remotetool_port
         self.listen_ip = listen_ip
         self.listen_port = listen_port
+        self.fileservice_port = fileservice_port
         self.server = None
         self.thread = None
         self.takeNumber = None
@@ -182,9 +197,6 @@ class CMAvatar(PeelDeviceBase):
         self.dispatcher = dispatcher.Dispatcher()
         self.dispatcher.set_default_handler(self.callback, True)
         
-        # 连接自动停止信号
-        self.auto_stop_requested.connect(self._on_auto_stop_requested)
-
         # self.start_services()
 
     def start_services(self):
@@ -232,6 +244,20 @@ class CMAvatar(PeelDeviceBase):
         self.state = "OFFLINE"
         self.update_state(self.state, "")
 
+    def remotetool_client_send(self, cmd, arg):
+        """发送远程工具命令"""
+        try:
+            print(f"OSC: {self.device_ip}:{self.remotetool_port} {cmd} {arg}")
+            if self.clientTransform is None:
+                return
+            self.clientTransform.send_message(cmd, arg)
+        except OSError as e:
+            self.on_state("ERROR")
+            raise e
+        except OverflowError as e:
+            self.on_state("ERROR")
+            raise e
+
     @staticmethod
     def device():
         return "CMAvatar"
@@ -260,8 +286,6 @@ class CMAvatar(PeelDeviceBase):
         return
 
     def command(self, command, arg):
-
-        print(f"{command} {arg}")
 
         if command == "takeNumber":
             self.takeNumber = int(arg)
@@ -298,8 +322,6 @@ class CMAvatar(PeelDeviceBase):
                     self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, item.text()))
 
     def callback(self, address, command, *args):
-        # 添加通用调试打印，显示所有收到的命令
-        print(f"[DEBUG] CMAvatar callback from {address} {command} {args}")
 
         # 过滤心跳回调的打印，减少日志噪音
         if command != common.cmd_rep_heatbeat:
@@ -329,7 +351,7 @@ class CMAvatar(PeelDeviceBase):
             self.push_state()
 
             # remote project path, remote files, local files
-            print("Adding " + str(self.current_take) + " " + str(args))
+            # 最小化日志噪音：不打印明细
             proj_fullPath = ""
             remote_files = []
             files_cnt = len(args)
@@ -344,59 +366,44 @@ class CMAvatar(PeelDeviceBase):
 
         if command == common.cmd_rep_exportFinish:
             # 设备导出完成回调
-            # 设备返回格式: (take_name,) 或 (export_result, take_name) 或 (export_result, export_message, take_name)
-            if len(args) == 1:
-                # 只有take_name
-                take_name = args[0]
+            # 设备返回格式: 用逗号分隔的文件路径字符串
+            # 例如: "file1.fbx,file2.c3d,file3.txt"
+            if len(args) >= 1:
+                file_paths_string = args[0]
+                
+                # 解析文件路径字符串（用逗号分隔）
+                if file_paths_string and isinstance(file_paths_string, str):
+                    file_paths = [path.strip() for path in file_paths_string.split(',') if path.strip()]
+                    # 从第一个文件路径中提取take_name（假设路径格式包含take_name）
+                    if file_paths:
+                        # 假设文件路径格式类似: /path/to/take_name/file.ext
+                        first_file = file_paths[0]
+                        take_name = os.path.basename(os.path.dirname(first_file))
+                    else:
+                        take_name = ""
+                else:
+                    file_paths = []
+                    take_name = ""
+                
                 export_result = True
-                export_message = ""
-            elif len(args) == 2:
-                # export_result 和 take_name
-                export_result = args[0]
-                take_name = args[1]
-                export_message = ""
-            elif len(args) >= 3:
-                # export_result, export_message, take_name
-                export_result = args[0]
-                export_message = args[1]
-                take_name = args[2]
+                export_message = "导出完成"
             else:
-                export_result = True
-                export_message = ""
+                # 参数不足，报错
+                export_result = False
+                export_message = "导出完成回调参数不足"
                 take_name = ""
+                file_paths = []
             
-            print(f"[DEBUG] CMAvatar导出完成: result={export_result}, message={export_message}, take_name={take_name}")
+            print(f"[DEBUG] 导出完成回调: result={export_result}, take_name={take_name}, file_paths={file_paths}")
             
             # 发送信号通知主窗口导出完成
-            if export_result and take_name:
-                print(f"[DEBUG] 发送export_completed信号: result={export_result}, message={export_message}, take_name={take_name}")
-                self.export_completed.emit(export_result, export_message, take_name)
-                print(f"[DEBUG] export_completed信号发送完成")
+            if export_result and take_name and file_paths:
+                self.export_completed.emit(export_result, export_message, take_name, file_paths)
             else:
-                print(f"[WARNING] 导出失败或无take_name: result={export_result}, take_name={take_name}")
+                print(f"[WARNING] 导出失败或参数不完整: result={export_result}, take_name={take_name}, file_paths={file_paths}")
             
             return
 
-        # 处理文件列表响应
-        if command == '/control/filelist/result':
-            print(f"[DEBUG] 收到文件列表响应命令: {command}, args={args}")
-            # 设备返回文件列表
-            # args[0] 是文件数量，args[1:] 是文件路径列表
-            if len(args) > 0:
-                file_count = args[0]
-                file_list = args[1:] if len(args) > 1 else []
-                print(f"[DEBUG] 收到文件列表: 数量={file_count}, 文件={file_list}")
-                
-                # 发送信号通知下载线程文件列表已收到
-                if hasattr(self, 'file_list_received'):
-                    print(f"[DEBUG] 发送file_list_received信号: {file_list}")
-                    self.file_list_received.emit(file_list)
-                else:
-                    print(f"[WARNING] 设备没有file_list_received信号")
-            else:
-                print(f"[WARNING] 文件列表响应参数为空: args={args}")
-            
-            return
 
         if command == common.cmd_rep_heatbeat:
             self.thermals = args
@@ -415,53 +422,18 @@ class CMAvatar(PeelDeviceBase):
                 return
                 
             stage = args[0]
-            startFrame = args[1]
-            endFrame = args[2]
+            # 简化录制流程：起始和结束帧都设置为0
+            startFrame = 0
+            endFrame = 0
             print(f"[DEBUG] CMAvatar动作回调: stage={stage}, startFrame={startFrame}, endFrame={endFrame}")
-            # 当前stage完成后，将高亮切换到下一条（若存在）
-            try:
-                next_stage = int(stage) + 1
-                self.HighLightNotes(next_stage)
-            except Exception:
-                self.HighLightNotes(stage)
+            # 禁用动作脚本高亮功能
+            # try:
+            #     next_stage = int(stage) + 1
+            #     self.HighLightNotes(next_stage)
+            # except Exception:
+            #     self.HighLightNotes(stage)
             self.UpdateActionInfo(stage, startFrame, endFrame)
-            
-            # 检查是否是最后一个动作，如果是则触发自动停止
-            self.check_and_auto_stop(stage)
 
-    def check_and_auto_stop(self, stage):
-        """检查是否是最后一个动作，如果是则触发自动停止"""
-        try:
-            # 通过cmd模块获取主窗口的动作脚本数量
-            from PeelApp import cmd
-            main_wnd = cmd.g_mainWnd
-            
-            if main_wnd and hasattr(main_wnd, '_edt_notes'):
-                total_actions = main_wnd._edt_notes.count()
-                # 如果当前动作是最后一个（索引从0开始，所以stage == total_actions - 1）
-                if total_actions > 0 and stage == total_actions - 1:
-                    print(f"检测到最后一个动作完成 (stage={stage}, total={total_actions})，触发自动停止")
-                    # 延迟1秒后触发自动停止，给用户一点时间看到最后一个动作
-                    import threading
-                    threading.Timer(1.0, self.trigger_auto_stop).start()
-        except Exception as e:
-            print(f"检查自动停止时出错: {e}")
-
-    def trigger_auto_stop(self):
-        """触发自动停止录制"""
-        print("发射自动停止信号")
-        self.auto_stop_requested.emit()
-        
-    def _on_auto_stop_requested(self):
-        """处理自动停止信号（在主线程中执行）"""
-        try:
-            from PeelApp import cmd
-            main_wnd = cmd.g_mainWnd
-            
-            if main_wnd and hasattr(main_wnd, 'auto_stop_recording'):
-                main_wnd.auto_stop_recording()
-        except Exception as e:
-            print(f"处理自动停止信号时出错: {e}")
 
     def push_state(self):
 
@@ -499,32 +471,25 @@ class CMAvatar(PeelDeviceBase):
     def has_harvest(self):
         return True
 
-    def harvest(self, directory, take_name=None):
+    def harvest(self, directory, take_name=None, file_paths=None):
         """
         下载设备文件到指定目录
         directory: 本地下载目录
-        take_name: take名称，用于文件夹下载模式
+        take_name: take名称
+        file_paths: 文件路径列表，必须提供
         """
-        print(f"[DEBUG] CMAvatar.harvest called with directory={directory}, take_name={take_name}")
+        print(f"[DEBUG] CMAvatar.harvest called with directory={directory}, take_name={take_name}, file_paths={file_paths}")
         
-        if take_name:
-            # 文件夹下载模式：基于take_name动态扫描整个文件夹
-            print(f"[DEBUG] 开始文件夹下载模式，take_name: {take_name}")
-            thread = CMAvatarDownloadThread(self, directory, take_name=take_name)
-            print(f"[DEBUG] 启动下载线程...")
-            try:
-                thread.start()
-                print(f"[DEBUG] 下载线程已启动")
-                print(f"[DEBUG] 线程状态: {thread.status}")
-                print(f"[DEBUG] 线程是否运行: {thread.isRunning()}")
-            except Exception as e:
-                print(f"[ERROR] 启动下载线程失败: {e}")
-        else:
-            # 如果没有take_name，报错
-            print(f"[ERROR] 文件夹下载模式需要提供take_name")
-            thread = CMAvatarDownloadThread(self, directory, take_name=None)
-            thread.error_message = "文件夹下载模式需要提供take_name"
-
+        if not take_name or not file_paths:
+            print(f"[ERROR] 文件下载需要提供take_name和file_paths")
+            thread = CMAvatarDownloadThread(self, directory, take_name=take_name, file_paths=file_paths)
+            thread.error_message = "文件下载需要提供take_name和file_paths"
+            return thread
+        
+        # 创建下载线程
+        print(f"[DEBUG] 开始文件下载模式，take_name: {take_name}, 文件数量: {len(file_paths)}")
+        thread = CMAvatarDownloadThread(self, directory, take_name=take_name, file_paths=file_paths)
+        
         return thread
 
     @staticmethod
@@ -543,7 +508,8 @@ class CMAvatar(PeelDeviceBase):
             remotetool_port = int(widget.remotetool_port.text())
             listen_ip = widget.listen_ip.ip()
             listen_port = int(widget.listen_port.text())
-            return CMAvatar(name, device_ip, device_port, remotetool_port, listen_ip, listen_port)
+            fileservice_port = int(widget.fileservice_port.text())
+            return CMAvatar(name, device_ip, device_port, remotetool_port, listen_ip, listen_port, fileservice_port)
         except ValueError:
             title = QCoreApplication.translate("peel_device", "Error")
             msg = QCoreApplication.translate("peel_device", "Invalid port")
@@ -663,8 +629,8 @@ class CMAvatarDownloadThread(DownloadThread):
     使用现有的cmd_req_filelist命令获取文件列表，然后递归下载
     """
 
-    def __init__(self, device, directory, listen_port=8444, take_name=None):
-        print(f"[DEBUG] CMAvatarDownloadThread.__init__ called with take_name={take_name}")
+    def __init__(self, device, directory, listen_port=8444, take_name=None, file_paths=None):
+        print(f"[DEBUG] CMAvatarDownloadThread.__init__ called with take_name={take_name}, file_paths={file_paths}")
         super(CMAvatarDownloadThread, self).__init__()
         self.device = device
         self.directory = directory
@@ -674,11 +640,9 @@ class CMAvatarDownloadThread(DownloadThread):
         self.file_i = None
         self.tick_mod = 0
         
-        # 文件夹下载相关
-        self.take_name = take_name  # 直接使用传入的take_name
-        self.file_list_received = False
-        self.file_list = []
-        self.download_mode = "folder"  # 默认文件夹下载模式
+        # 文件下载相关
+        self.take_name = take_name
+        self.file_paths = file_paths or []  # 直接使用传入的文件路径列表
         
         # 错误处理
         self.error_message = None
@@ -709,46 +673,28 @@ class CMAvatarDownloadThread(DownloadThread):
                 self.socket = None
         super(CMAvatarDownloadThread, self).teardown()
 
-    def _request_file_list(self, take_name):
-        """
-        使用现有的cmd_req_filelist命令请求文件列表
-        """
-        print(f"[DEBUG] 请求文件列表: {take_name}")
-        print(f"[DEBUG] 设备IP: {self.device.listen_ip}, 端口: {self.listen_port}")
-        print(f"[DEBUG] 发送命令: {common.cmd_req_filelist}")
-        print(f"[DEBUG] 命令参数: (self.device.listen_ip={self.device.listen_ip}, self.listen_port={self.listen_port}, take_name={take_name})")
-        
-        # 发送文件列表请求命令
-        # 假设设备支持传入take_name作为参数
-        try:
-            self.device.clientTransform.send_message(common.cmd_req_filelist, (self.device.listen_ip, self.listen_port, take_name))
-            print(f"[DEBUG] 已发送文件列表请求命令")
-            print(f"[DEBUG] 等待设备响应 /control/filelist/result 命令...")
-        except Exception as e:
-            print(f"[ERROR] 发送文件列表请求失败: {e}")
-            self.error_message = f"发送文件列表请求失败: {e}"
-
-    def _on_file_list_received(self, file_list):
-        """
-        处理设备返回的文件列表
-        """
-        print(f"[DEBUG] 收到文件列表: {file_list}")
-        self.file_list = file_list
-        self.file_list_received = True
 
     def run(self):
         """
-        文件夹递归下载主流程
+        文件下载主流程
+        直接使用提供的文件路径列表进行下载
         """
         print(f"[DEBUG] ===== CMAvatarDownloadThread.run() 开始执行 =====")
-        print(f"[DEBUG] 开始文件夹下载，take_name: {self.take_name}")
+        print(f"[DEBUG] 开始文件下载，take_name: {self.take_name}")
         print(f"[DEBUG] 下载目录: {self.directory}")
-        print(f"[DEBUG] 设备: {self.device}")
+        print(f"[DEBUG] 文件路径列表: {self.file_paths}")
         
         # 检查take_name
         if not self.take_name:
-            print(f"[ERROR] 文件夹下载需要提供take_name")
-            self.log("文件夹下载需要提供take_name")
+            print(f"[ERROR] 文件下载需要提供take_name")
+            self.log("文件下载需要提供take_name")
+            self.set_finished()
+            return
+        
+        # 检查文件路径列表
+        if not self.file_paths:
+            print(f"[ERROR] 没有提供文件路径列表")
+            self.log("没有提供文件路径列表")
             self.set_finished()
             return
         
@@ -775,63 +721,39 @@ class CMAvatarDownloadThread(DownloadThread):
             self.socket.listen()
             print(f"[DEBUG] Socket开始监听端口: {self.listen_port}")
             
-            # 连接文件列表信号
-            if hasattr(self.device, 'file_list_received'):
-                self.device.file_list_received.connect(self._on_file_list_received)
-            
-            # 请求文件列表
-            self._request_file_list(self.take_name)
-            
-            # 等待文件列表返回（设置超时）
-            timeout_count = 0
-            max_timeout = 30  # 30秒超时
-            
-            print(f"[DEBUG] 开始等待文件列表响应...")
-            while not self.file_list_received and timeout_count < max_timeout:
-                time.sleep(1)
-                timeout_count += 1
-                print(f"[DEBUG] 等待文件列表... ({timeout_count}/{max_timeout})")
-                
-                # 每5秒检查一次设备状态
-                if timeout_count % 5 == 0:
-                    print(f"[DEBUG] 设备状态检查: IP={self.device.listen_ip}, 端口={self.listen_port}")
-                    print(f"[DEBUG] 信号连接状态: {hasattr(self.device, 'file_list_received')}")
-            
-            # 断开信号连接
-            if hasattr(self.device, 'file_list_received'):
-                try:
-                    self.device.file_list_received.disconnect(self._on_file_list_received)
-                except:
-                    pass
-            
-            if not self.file_list_received:
-                print(f"[ERROR] 获取文件列表超时")
-                self.log("获取文件列表超时")
-                self.set_finished()
-                return
-            
-            if not self.file_list:
-                print(f"[WARNING] 文件夹为空: {self.take_name}")
-                self.log(f"文件夹为空: {self.take_name}")
-                self.set_finished()
-                return
-            
             # 构建FileItem列表
-            for remote_file in self.file_list:
-                # 构建本地文件路径，保持目录结构
-                # remote_file 格式: /path/to/take_name/file.ext
-                # 本地路径: directory/take_name/file.ext
+            for remote_file in self.file_paths:
+                # 构建本地文件路径，保持完整的目录结构
+                # remote_file 格式: D:/Program Files/CMAvatar/20250916/jingduceshi/take_name/file.ext
+                # 本地路径: directory/take_name/file.ext (保持相对路径结构)
                 
-                # 提取文件名
-                file_name = os.path.basename(remote_file)
+                # 提取相对于take_name目录的路径
+                # 假设设备端路径格式: .../take_name/subfolder/file.ext
+                # 我们需要提取 subfolder/file.ext 部分
                 
-                # 构建本地完整路径
-                local_file_path = os.path.join(self.directory, self.take_name, file_name)
+                # 找到take_name在路径中的位置
+                take_name_pos = remote_file.find(self.take_name)
+                if take_name_pos != -1:
+                    # 提取take_name之后的相对路径
+                    relative_path = remote_file[take_name_pos + len(self.take_name):]
+                    # 去掉开头的路径分隔符
+                    if relative_path.startswith('/') or relative_path.startswith('\\'):
+                        relative_path = relative_path[1:]
+                    
+                    # 构建本地完整路径
+                    local_file_path = os.path.join(self.directory, self.take_name, relative_path)
+                else:
+                    # 如果找不到take_name，只使用文件名
+                    file_name = os.path.basename(remote_file)
+                    local_file_path = os.path.join(self.directory, self.take_name, file_name)
+                
                 local_folder = os.path.dirname(local_file_path)
                 
                 # 创建FileItem
                 fileItem = FileItem("", remote_file, local_folder, local_file_path)
                 self.files.append(fileItem)
+                
+                print(f"[DEBUG] 文件映射: {remote_file} -> {local_file_path}")
             
             print(f"[DEBUG] 准备下载 {len(self.files)} 个文件")
             self.log(f"准备下载 {len(self.files)} 个文件")

@@ -1,4 +1,4 @@
-import sys, os, importlib, json
+import sys, os, importlib, json, requests
 from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
@@ -125,7 +125,6 @@ class MainWindow(QMainWindow):
         self._export_target_path = ""
         
         # 下载队列管理
-        self._download_queue = []  # 等待下载的take_name列表
         self._is_downloading = False  # 当前是否正在下载
 
         self.mod_merge_fbx = None
@@ -330,7 +329,7 @@ class MainWindow(QMainWindow):
                     return True
                 if device.address != init_device.get('address', ''):
                     return True
-        
+    
         # shot list是否被修改过
         shot_list_count_new = len(self._shot_list)
         if len(self.init_shot_list) != shot_list_count_new:
@@ -513,19 +512,10 @@ class MainWindow(QMainWindow):
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 4, twItem)
         
-        # 状态下拉框
+        # 状态下拉框（仅两个选项，默认“接受”）
         status_combo = QComboBox()
-        status_combo.addItems(["待处理", "接受", "已拒绝", "NG"])
-        
-        # 根据当前状态设置选中项
-        status_map = {
-            "pending": "待审核",
-            "accepted": "已接受", 
-            "rejected": "已拒绝",
-            "ng": "NG"
-        }
-        current_status_text = status_map.get(take_item._task_status, "待审核")
-        status_combo.setCurrentText(current_status_text)
+        status_combo.addItems(["接受", "拒绝"])  # 仅保留两个选项
+        status_combo.setCurrentText("接受")
         
         # 连接状态变更事件
         status_combo.currentTextChanged.connect(lambda text, r=row: self.on_status_changed(r, text))
@@ -537,25 +527,22 @@ class MainWindow(QMainWindow):
         try:
             if 0 <= row < len(self._takelist):
                 take_item = self._takelist[row]
-                
+
                 # 将中文状态转换为英文状态
                 status_map = {
-                    "待审核": "pending",
-                    "已接受": "accepted",
-                    "已拒绝": "rejected", 
-                    "NG": "ng"
+                    "接受": "accepted",
+                    "拒绝": "rejected"
                 }
-                new_status = status_map.get(status_text, "pending")
-                
+                new_status = status_map.get(status_text, "accepted")
+
                 # 更新TakeItem状态
                 take_item._task_status = new_status
-                
+
                 print(f"任务 {take_item._task_id} 状态已更新为: {status_text} ({new_status})")
-                
+
                 # 如果任务已保存到数据库，则更新数据库状态
                 if hasattr(take_item, '_task_id') and take_item._task_id:
                     self._update_task_status_in_db(take_item._task_id, new_status)
-                    
         except Exception as e:
             print(f"更新状态失败: {e}")
 
@@ -586,8 +573,8 @@ class MainWindow(QMainWindow):
         saved = self.save_project_file()
         if saved:
             self._will_save = False
-            self.setWindowTitle(f"{AppName} - {self._save_fullpath}")
-            self.statusBar().showMessage(f"Saved '{self._save_fullpath}'", 2000)
+        self.setWindowTitle(f"{AppName} - {self._save_fullpath}")
+        self.statusBar().showMessage(f"Saved '{self._save_fullpath}'", 2000)
 
         # 静默不弹框
         if silence:
@@ -662,12 +649,11 @@ class MainWindow(QMainWindow):
 
 
     def collect_file(self):
-        # 选择保存路径
-        from PySide6.QtWidgets import QFileDialog
-        path = QFileDialog.getExistingDirectory(self, "选择保存路径", self._open_folder)
-        if not path:
+        """收集文件：驱动设备导出，监听回调，发送给fileservice"""
+        # 若正在等待上一次导出回调，阻止重复触发
+        if getattr(self, '_waiting_for_export', False):
+            self.statusBar().showMessage("正在等待设备导出完成，请稍后再试...", 3000)
             return
-        
         # 检查是否有设备连接
         has_connection, message = self.check_device_connection()
         if not has_connection:
@@ -677,37 +663,18 @@ class MainWindow(QMainWindow):
         # 连接CMAvatar设备信号（如果还没有连接）
         self.connect_avatar_signals()
         
-        # 设置导出目标路径
-        self._export_target_path = path
-        
-        # 先调用设备的导出命令（路径为空，让设备自己处理）
+        # 发送导出命令（设备将按任务逐条回调 exportFinish，多次触发）
+        # try:
         self.mod_peel.command('Export', '')
-        
-        # 显示等待消息
-        self.statusBar().showMessage("等待设备导出完成...", 0)
-        
-        # 设置超时保护（30秒后如果还没收到回调，则停止等待）
-        if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
-            try:
-                self._export_timeout_timer.stop()
-            except Exception:
-                pass
-        else:
-            self._export_timeout_timer = QTimer(self)
-            self._export_timeout_timer.timeout.connect(self._on_export_timeout)
-        
-        # 30秒超时
-        self._export_timeout_timer.start(30000)
+        self.statusBar().showMessage("已发送导出命令，等待设备回调...", 3000)
+        # except Exception as e:
+        #     print(f"[ERROR] 发送导出命令失败: {e}")
+        #     QMessageBox.warning(self, "导出失败", f"发送导出命令失败: {e}")
+        #     return
 
     def _on_export_timeout(self):
-        """导出超时处理"""
-        self.statusBar().showMessage("导出超时，尝试下载现有文件...", 3000)
-        # 超时后仍然尝试下载
-        if self.mod_peel.show_harvest_with_path(self._export_target_path):
-            self._will_save = True
-            self.statusBar().showMessage("下载完成", 3000)
-        else:
-            self.statusBar().showMessage("下载失败", 3000)
+        """导出超时处理（已不使用）"""
+        self.statusBar().showMessage("导出超时", 2000)
 
     def export_file(self):
         """从数据库导出TaskInfo到选定文件夹"""
@@ -1856,26 +1823,26 @@ class MainWindow(QMainWindow):
 
     def connect_avatar_signals(self):
         """连接CMAvatar设备的信号"""
-        print(f"[DEBUG] connect_avatar_signals 被调用")
+        # 连接CMAvatar设备信号
         
         # 从peel模块获取真正的设备对象
         try:
             # 使用主窗口已经导入的peel模块的DEVICES（DeviceCollection）
             if hasattr(self.mod_peel, 'DEVICES') and self.mod_peel.DEVICES:
-                print(f"[DEBUG] 从mod_peel.DEVICES获取设备，数量: {len(self.mod_peel.DEVICES)}")
+                # 调试：设备数量
                 
                 # 查找CMAvatar设备（真正的Python设备对象）
                 avatar_devices = [d for d in self.mod_peel.DEVICES if d.device() == "CMAvatar"]
-                print(f"[DEBUG] 找到的CMAvatar设备数量: {len(avatar_devices)}")
+                # 调试：找到的CMAvatar设备数量
                 
                 for avatar_device in avatar_devices:
-                    print(f"[DEBUG] 处理CMAvatar设备: {avatar_device.name}")
+                    # 处理找到的设备
                     print(f"[DEBUG] 设备类型: {type(avatar_device)}")
                     if hasattr(avatar_device, 'export_completed'):
                         try:
                             # 断开之前的连接（如果有的话）
                             avatar_device.export_completed.disconnect()
-                            print(f"[DEBUG] 断开之前的信号连接")
+                            # 清理旧连接
                         except TypeError:
                             # 如果没有连接过，会抛出TypeError，忽略即可
                             print(f"[DEBUG] 没有之前的信号连接")
@@ -1883,10 +1850,9 @@ class MainWindow(QMainWindow):
                         
                         # 连接新的信号
                         avatar_device.export_completed.connect(self._on_avatar_export_completed)
-                        print(f"已连接CMAvatar设备信号: {avatar_device.name}")
-                        print(f"[DEBUG] 信号连接成功: {avatar_device.name}")
+                        # 信号连接成功
                         print(f"[DEBUG] 设备对象: {avatar_device}")
-                        print(f"[DEBUG] 信号对象: {avatar_device.export_completed}")
+                        # 信号对象
                     else:
                         print(f"[ERROR] 设备 {avatar_device.name} 没有 export_completed 信号")
             else:
@@ -1896,11 +1862,13 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
 
-    def _on_avatar_export_completed(self, export_result, export_message, take_name):
+    def _on_avatar_export_completed(self, export_result, export_message, take_name, file_paths=None):
         """处理CMAvatar设备导出完成回调"""
-        print(f"[DEBUG] 收到导出完成回调: result={export_result}, message={export_message}, take_name={take_name}")
+        print(f"[DEBUG] 收到导出完成回调: result={export_result}, message={export_message}, take_name={take_name}, file_paths={file_paths}")
+        # 无论成功失败，结束等待状态
+        self._waiting_for_export = False
         
-        if export_result and take_name:
+        if export_result and take_name and file_paths:
             # 停止超时定时器
             if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
                 try:
@@ -1909,115 +1877,68 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"[DEBUG] 停止超时定时器失败: {e}")
             
-            # 导出成功，添加到下载队列
-            print(f"[DEBUG] 导出完成，添加到下载队列: {take_name}")
-            self._download_queue.append(take_name)
-            
-            # 更新状态栏显示队列状态
-            queue_size = len(self._download_queue)
-            if self._is_downloading:
-                self.statusBar().showMessage(f"下载队列: {queue_size} 个任务等待中...", 0)
-            else:
-                self.statusBar().showMessage(f"导出完成，{queue_size} 个任务等待下载...", 0)
-            
-            # 如果当前没有在下载，开始处理队列
-            if not self._is_downloading:
-                self._process_download_queue()
+            # 导出成功，发送给fileservice
+            print(f"[DEBUG] 导出完成，发送给fileservice: {take_name}, 文件数量: {len(file_paths)}")
+            self._send_to_fileservice(take_name, file_paths)
         else:
             # 导出失败
             self.statusBar().showMessage(f"导出失败: {export_message}", 3000)
             print(f"[ERROR] 导出失败: {export_message}")
             QMessageBox.warning(self, "导出失败", f"设备导出失败: {export_message}")
 
-    def _process_download_queue(self):
-        """处理下载队列"""
-        if not self._download_queue or self._is_downloading:
-            return
-        
-        # 从队列中取出第一个任务
-        take_name = self._download_queue.pop(0)
-        print(f"[DEBUG] 开始处理下载队列中的任务: {take_name}")
-        
-        # 设置下载状态
-        self._is_downloading = True
-        
-        # 更新状态栏
-        queue_size = len(self._download_queue)
-        if queue_size > 0:
-            self.statusBar().showMessage(f"正在下载: {take_name} (队列中还有 {queue_size} 个任务)...", 0)
-        else:
-            self.statusBar().showMessage(f"正在下载: {take_name}...", 0)
-        
-        # 开始下载
-        self._start_async_download(take_name)
-
-    def _start_async_download(self, take_name):
-        """异步启动下载，不阻塞UI"""
+    def _send_to_fileservice(self, take_name, file_paths):
+        """发送文件路径给fileservice"""
         try:
-            print(f"[DEBUG] 开始异步下载: take_name={take_name}, path={self._export_target_path}")
+            if not file_paths:
+                print(f"[ERROR] 没有文件路径")
+                return
             
-            # 获取真正的CMAvatar设备对象（Python对象，有harvest方法）
+            # 直接使用第一个文件路径（从日志看只有一个文件路径）
+            file_path = file_paths[0]
+            
+            print(f"[DEBUG] 发送给fileservice: 文件路径={file_path}")
+            
+            # 获取CMAvatar设备的fileservice配置
             harvest_devices = [d for d in self.mod_peel.DEVICES if d.device() == "CMAvatar"]
             if len(harvest_devices) == 0:
-                self.statusBar().showMessage("没有找到CMAvatar设备", 3000)
+                print(f"[ERROR] 没有找到CMAvatar设备")
+                QMessageBox.warning(self, "设备错误", "没有找到CMAvatar设备")
                 return
             
             device = harvest_devices[0]
-            download_path = os.path.join(self._export_target_path, device.name)
+            fileservice_url = f"http://{device.device_ip}:{device.fileservice_port}"
             
-            print(f"[DEBUG] 调用 device.harvest with download_path={download_path}, take_name={take_name}")
+            print(f"[DEBUG] 使用fileservice URL: {fileservice_url}")
             
-            # 创建下载线程，确保传递take_name参数
-            download_thread = device.harvest(download_path, take_name)
+            # 准备发送给fileservice的数据
+            upload_data = {
+                "folder_paths": [file_path],  # 直接发送文件路径
+                "server_url": "http://localhost:8000",  # Django服务器地址
+                "auth_token": "default_token_123"
+            }
             
-            # 连接信号
-            download_thread.all_done.connect(lambda: self._on_download_completed(take_name))
-            download_thread.tick.connect(self._on_download_progress)
-            download_thread.file_done.connect(self._on_file_downloaded)
-            download_thread.message.connect(self._on_download_message)
+            # 发送请求给fileservice
+            response = requests.post(
+                f"{fileservice_url}/fileservice/upload/",
+                json=upload_data,
+                timeout=10
+            )
             
-            # 启动下载线程
-            download_thread.start()
-            print(f"[DEBUG] 异步下载线程已启动: {take_name}")
-            
+            if response.status_code == 200:
+                result = response.json()
+                task_id = result["task_id"]
+                print(f"[DEBUG] Fileservice任务创建成功: {task_id}")
+                self.statusBar().showMessage(f"文件已发送给fileservice，任务ID: {task_id}", 5000)
+            else:
+                print(f"[ERROR] Fileservice请求失败: {response.status_code}, {response.text}")
+                self.statusBar().showMessage(f"发送给fileservice失败: {response.status_code}", 3000)
+                QMessageBox.warning(self, "上传失败", f"发送给fileservice失败: {response.text}")
+                
         except Exception as e:
-            print(f"[ERROR] 启动异步下载失败: {e}")
-            self.statusBar().showMessage(f"启动下载失败: {e}", 3000)
-    
-    def _on_download_completed(self, take_name):
-        """下载完成回调"""
-        print(f"[DEBUG] 文件夹下载完成: {take_name}")
-        self._will_save = True
-        
-        # 重置下载状态
-        self._is_downloading = False
-        
-        # 更新状态栏
-        queue_size = len(self._download_queue)
-        if queue_size > 0:
-            self.statusBar().showMessage(f"下载完成: {take_name}，继续处理队列中的 {queue_size} 个任务...", 2000)
-            # 处理队列中的下一个任务
-            self._process_download_queue()
-        else:
-            self.statusBar().showMessage(f"所有下载任务完成: {take_name}", 3000)
-    
-    def _on_download_progress(self, progress):
-        """下载进度回调"""
-        progress_percent = int(progress * 100)
-        self.statusBar().showMessage(f"下载进度: {progress_percent}%", 0)
-    
-    def _on_file_downloaded(self, filename, status, error):
-        """单个文件下载完成回调"""
-        if status == 1:  # COPY_OK
-            print(f"[DEBUG] 文件下载成功: {filename}")
-        elif status == 0:  # COPY_FAIL
-            print(f"[ERROR] 文件下载失败: {filename}, 错误: {error}")
-        elif status == 2:  # COPY_SKIP
-            print(f"[DEBUG] 文件跳过: {filename}")
-    
-    def _on_download_message(self, message):
-        """下载消息回调"""
-        print(f"[DEBUG] 下载消息: {message}")
+            print(f"[ERROR] 发送给fileservice异常: {e}")
+            self.statusBar().showMessage(f"发送给fileservice异常: {e}", 3000)
+            QMessageBox.warning(self, "上传异常", f"发送给fileservice异常: {e}")
+
 
     def check_device_connection(self):
         """检查CMAvatar设备连接状态"""
@@ -2032,7 +1953,7 @@ class MainWindow(QMainWindow):
         # 通过设备名称识别CMAvatar设备
         avatar_devices = [d for d in self._all_device if d.name == "CMAvatar"]
         
-        print(f"[DEBUG] 找到的CMAvatar设备数量: {len(avatar_devices)}")
+        # 调试：找到的CMAvatar设备数量
         
         if not avatar_devices:
             return False, "没有找到CMAvatar设备"
@@ -2044,7 +1965,7 @@ class MainWindow(QMainWindow):
         # 检查设备状态
         if hasattr(avatar_device, 'status'):
             device_status = avatar_device.status
-            if device_status == "ONLINE":
+            if device_status == "ONLINE" or device_status == "RECORDING":
                 return True, f"CMAvatar设备在线: {avatar_device.name}"
             else:
                 return False, f"CMAvatar设备离线: {avatar_device.name} (状态: {device_status})"
@@ -2058,68 +1979,96 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请先选择一个任务")
             return
         
-        # 检查设备连接状态
-        has_connection, message = self.check_device_connection()
-        if not has_connection:
-            QMessageBox.warning(self, "设备连接检查", message)
-            return
-            
+        # 正在录制时，直接停止（不做设备连接检查，避免RECORDING被误判离线）
         if self._recording:
-            #录制中
-            # 停止时仅依赖记录ID：取最后一条记录的record_id
-            if not self._takelist:
-                return
-            last_take = self._takelist[-1]
-            stop_id = last_take._record_id if hasattr(last_take, "_record_id") else None
-            if stop_id is None:
-                # 兜底用行号作为ID
-                stop_id = len(self._takelist)
-            self.mod_peel.command('stop', str(stop_id))
-            # 已移除标题标签，无需设置样式
-            self._btn_record.setText("录制")
-            self._record_secord = 0
-            self._recording = False
-
-            self._time_record.stop()
-
-            take_last = self._takelist[-1]
-            take_last._end_time = datetime.now()
-            take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
-
-            row_count = len(self._takelist)
-            lastRow = row_count - 1
-
-            #录制结束时间
-            str_end_time = take_last._end_time.strftime('%H:%M:%S')
-            twItem = QTableWidgetItem(str_end_time)
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(lastRow, 4, twItem)
-
-            #录制时长(1位小数)
-            twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_last._due)} sec")
-            twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-            self._table_takelist.setItem(lastRow, 5, twItem)
-
-            self._device_add.setEnabled(True)
-            self._device_del.setEnabled(True)
-            self._btn_record.setEnabled(True)  # 重新启用录制按钮
-
-            self.statusBar().showMessage("就绪...", 2000)
-            self.update_tips("录制完成", 3000)  # 3秒后恢复默认
-            self.highLightNoteInfo(-1)
-            self.save(True)
+            # 录制中 - 停止录制
+            self.stop_recording()
         else:
-            #未录制 - 开始倒计时
-            shot_name = self._edt_shotName.text()
-            take_no = 1
-            self.start_countdown(3, "准备开始录制")
-            # 禁用录制按钮防止重复点击
-            self._btn_record.setEnabled(False)
-            # 注意：计时器在倒计时结束后才启动，不在这里启动
-            # 更新索引 - 使用当前任务信息
-            self._dict_shotname.add_shot_with_take(shot_name, take_no)
-            self.update_shotlist()
+            # 仅在准备开始录制时检查设备连接
+            has_connection, message = self.check_device_connection()
+            if not has_connection:
+                QMessageBox.warning(self, "设备连接检查", message)
+                return
+            # 未录制 - 开始录制
+            self.start_recording()
+
+    def start_recording(self):
+        """开始录制流程"""
+        print("[DEBUG] 开始录制流程")
+        
+        shot_name = self._edt_shotName.text()
+        take_no = 1
+        
+        # 开始3秒倒计时
+        self.start_countdown(3, "准备开始录制")
+        
+        # 禁用录制按钮防止重复点击
+        self._btn_record.setEnabled(False)
+        
+        # 更新索引 - 使用当前任务信息
+        self._dict_shotname.add_shot_with_take(shot_name, take_no)
+        self.update_shotlist()
+        
         self._will_save = True
+
+    def stop_recording(self):
+        """停止录制流程"""
+        print("[DEBUG] 停止录制流程")
+        # 计算停止ID（若有正在记录的take则优先使用其record_id，否则兜底0或当前行数）
+        stop_id = 0
+        if self._takelist:
+            last_take = self._takelist[-1]
+            stop_id = getattr(last_take, "_record_id", None) or len(self._takelist)
+
+        self.mod_peel.command('stop', str(stop_id))
+
+        # 更新UI状态
+        self._btn_record.setText("录制")
+        self._record_secord = 0
+        self._recording = False
+        self._time_record.stop()
+
+        # 若存在有效take，则更新结束时间与时长并刷新表格
+        if self._takelist:
+            take_last = self._takelist[-1]
+            try:
+                take_last._end_time = datetime.now()
+                take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
+
+                row_count = len(self._takelist)
+                lastRow = row_count - 1
+
+                str_end_time = take_last._end_time.strftime('%H:%M:%S')
+                twItem = QTableWidgetItem(str_end_time)
+                twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+                self._table_takelist.setItem(lastRow, 4, twItem)
+
+                twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_last._due)} sec")
+                twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+                self._table_takelist.setItem(lastRow, 5, twItem)
+            except Exception as e:
+                print(f"[WARN] 更新录制行显示失败: {e}")
+
+        # 重新启用设备管理按钮与录制按钮
+        self._device_add.setEnabled(True)
+        self._device_del.setEnabled(True)
+        self._btn_record.setEnabled(True)
+
+        self.statusBar().showMessage("就绪...", 2000)
+        self.update_tips("录制完成", 3000)
+        self.save(True)
+
+        # 保存任务到数据库（若有take）
+        try:
+            if self._takelist:
+                last_take = self._takelist[-1]
+                task_id = getattr(last_take, '_task_id', None)
+                if task_id is not None:
+                    self._save_task_to_database(task_id, [last_take])
+        except Exception as e:
+            print(f"[WARN] 停止后保存数据库失败: {e}")
+
+    
 
     def UpdateActionInfo(self, row, startFrame, endFrame):
         print(f"[DEBUG] UpdateActionInfo: row={row}, startFrame={startFrame}, endFrame={endFrame}")
@@ -2207,16 +2156,14 @@ class MainWindow(QMainWindow):
         """清除提示信息，恢复默认状态"""
         self._edt_tips.setPlainText("就绪")
 
-    def start_countdown(self, seconds=3, message="准备开始录制", auto_stop=False):
+    def start_countdown(self, seconds=3, message="准备开始录制"):
         """开始倒计时
         
         Args:
             seconds: 倒计时秒数，默认3秒
             message: 倒计时期间显示的消息
-            auto_stop: 是否为自动停止模式
         """
         self._countdown_seconds = seconds
-        self._countdown_is_auto_stop = auto_stop
         self._countdown_timer = QTimer()
         self._countdown_timer.timeout.connect(self._update_countdown)
         
@@ -2236,25 +2183,19 @@ class MainWindow(QMainWindow):
             # 更新倒计时数字
             self._lbl_countdown.setText(str(self._countdown_seconds))
             # 更新提示信息
-            if hasattr(self, '_countdown_is_auto_stop') and self._countdown_is_auto_stop:
-                self.update_tips(f"录制即将结束\n倒计时: {self._countdown_seconds}秒")
-            else:
-                self.update_tips(f"准备开始录制\n倒计时: {self._countdown_seconds}秒")
+            self.update_tips(f"准备开始录制\n倒计时: {self._countdown_seconds}秒")
         else:
             # 倒计时结束
             self._countdown_timer.stop()
             self._lbl_countdown.hide()
-            if hasattr(self, '_countdown_is_auto_stop') and self._countdown_is_auto_stop:
-                self.update_tips("录制完成！")
-                # 触发自动停止录制
-                self._on_auto_stop_countdown_finished()
-            else:
-                self.update_tips("录制开始！")
-                # 这里可以触发实际的录制开始逻辑
-                self._on_countdown_finished()
+            self.update_tips("录制开始！")
+            # 触发实际的录制开始逻辑
+            self._on_countdown_finished()
 
     def _on_countdown_finished(self):
         """倒计时结束后的回调，开始实际录制"""
+        print("[DEBUG] 倒计时结束，开始录制")
+        
         # 重新启用录制按钮
         self._btn_record.setEnabled(True)
         
@@ -2315,24 +2256,27 @@ class MainWindow(QMainWindow):
         # 使用TakeItem的take_name作为录制参数
         take_name = temp_take_item._take_name
 
-        # for unreal（如仍需）
+        # 发送录制命令
         self.mod_peel.command('shotName', shot_name)
-        # common command
         self.mod_peel.command('takeNumber', take_no)
         self.mod_peel.command('record', take_name)
-        # 不再显示标题标签，保持原有样式调用安全
-        self._btn_record.setText('00:00:00')
         
-        # 倒计时结束后才开始计时
+        # 更新UI状态
+        self._btn_record.setText('00:00:00')
         self._time_record.start(1000)
         self._recording = True
+        
+        # 禁用设备管理按钮
+        self._device_add.setEnabled(False)
+        self._device_del.setEnabled(False)
+        
+        # 更新状态栏
+        self.statusBar().showMessage("正在录制...", 0)
+        self.update_tips("录制中...")
+        
+        print(f"[DEBUG] 录制已开始: take_name={take_name}")
 
-        # 倒计时结束后立即高亮第一条脚本
-        try:
-            if hasattr(self, '_edt_notes') and self._edt_notes.count() > 0:
-                self.highLightNoteInfo(0)
-        except Exception:
-            pass
+        # 已移除动作脚本的录制期高亮逻辑
 
         strDesc = self._edt_desc.text()
         strNotes = '\n'.join(self.get_notes_text())
@@ -2352,7 +2296,7 @@ class MainWindow(QMainWindow):
         row_count = len(self._takelist)
         self._table_takelist.setRowCount(row_count)
         newRow = row_count - 1
-        
+
         # 使用updateTakeRow方法统一更新
         self.updateTakeRow(newRow, takeItem)
         self._table_takelist.scrollToBottom()
@@ -2360,73 +2304,6 @@ class MainWindow(QMainWindow):
         self.update_tips("正在录制中...")  # 永久显示直到停止
         #self._edt_notes.setReadOnly(True)
 
-    def auto_stop_recording(self):
-        """自动停止录制，由设备回调触发"""
-        if not self._recording:
-            return
-            
-        print("触发自动停止录制")
-        
-        # 更新提示信息
-        self.update_tips("录制完成，即将结束...")
-        
-        # 开始3秒倒计时
-        self.start_countdown(3, "录制即将结束", auto_stop=True)
-        
-    def _on_auto_stop_countdown_finished(self):
-        """自动停止倒计时结束后的回调"""
-        if not self._recording:
-            return
-            
-        print("自动停止倒计时结束，执行停止录制")
-        
-        # 执行停止录制逻辑
-        if not self._takelist:
-            return
-            
-        last_take = self._takelist[-1]
-        stop_id = last_take._record_id if hasattr(last_take, "_record_id") else None
-        if stop_id is None:
-            # 兜底用行号作为ID
-            stop_id = len(self._takelist)
-            
-        self.mod_peel.command('stop', str(stop_id))
-        
-        # 更新UI状态
-        self._btn_record.setText("录制")
-        self._record_secord = 0
-        self._recording = False
-
-        self._time_record.stop()
-
-        take_last = self._takelist[-1]
-        take_last._end_time = datetime.now()
-        take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
-
-        row_count = len(self._takelist)
-        lastRow = row_count - 1
-
-        # 使用updateTakeRow方法统一更新
-        self.updateTakeRow(lastRow, take_last)
-        self._table_takelist.scrollToBottom()
-        
-        # 更新提示信息
-        self.update_tips("录制完成！")
-        
-        # 重新启用录制按钮
-        self._btn_record.setEnabled(True)
-        
-        self.statusBar().showMessage("录制完成", 2000)
-        #self.highLightNoteInfo()
-
-        self._device_add.setEnabled(False)
-        self._device_del.setEnabled(False)
-
-        self._record_secord = 0
-        
-        # 自动保存到数据库（如果配置了自动保存）
-        if hasattr(self, 'auto_save_to_db') and self.auto_save_to_db:
-            self._auto_save_current_recording()
 
     def _auto_save_current_recording(self):
         """自动保存当前录制到数据库"""
