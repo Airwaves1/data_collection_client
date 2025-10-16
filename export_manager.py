@@ -1,14 +1,164 @@
 """
 数据导出管理器
-负责从数据库导出TaskInfo和视频文件到指定目录
+负责调用后端导出API，下载生成的CMAvatar_data目录到本地
 """
 
 import os
 import json
 import shutil
 import glob
+import requests
+import zipfile
+import tempfile
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QThread, Signal
+
+
+class ExportWorker(QThread):
+    """导出工作线程"""
+    export_progress_updated = Signal(int, str)  # 导出进度, 消息
+    download_progress_updated = Signal(int, str)  # 下载进度, 消息
+    export_completed = Signal(bool, str)  # 成功, 消息
+    
+    def __init__(self, api_client, export_dir):
+        super().__init__()
+        self.api_client = api_client
+        self.export_dir = export_dir
+    
+    def run(self):
+        try:
+            # 1. 启动后端导出
+            self.export_progress_updated.emit(10, "正在启动后端导出...")
+            export_result = self.api_client.start_export()
+            if not export_result:
+                self.export_completed.emit(False, "启动后端导出失败")
+                return
+            
+            export_id = export_result.get('export_id')
+            if not export_id:
+                self.export_completed.emit(False, "获取导出ID失败")
+                return
+            
+            # 2. 等待导出完成
+            self.export_progress_updated.emit(20, "等待后端导出完成...")
+            while True:
+                status_result = self.api_client.get_export_status(export_id)
+                if not status_result:
+                    self.export_completed.emit(False, "查询导出状态失败")
+                    return
+                
+                status = status_result.get('status')
+                progress = status_result.get('progress', 0)
+                message = status_result.get('message', '')
+                
+                self.export_progress_updated.emit(progress, f"后端导出进度: {progress}% - {message}")
+                
+                if status == 'completed':
+                    export_path = status_result.get('export_path')
+                    print(f"[DEBUG] 导出完成，路径: {export_path}")
+                    if not export_path:
+                        self.export_completed.emit(False, "导出路径为空")
+                        return
+                    break
+                elif status == 'failed':
+                    error_msg = status_result.get('error_message', '未知错误')
+                    self.export_completed.emit(False, f"后端导出失败: {error_msg}")
+                    return
+                
+                self.msleep(1000)  # 等待1秒
+            
+            # 3. 下载导出的目录
+            self.download_progress_updated.emit(0, "开始下载文件...")
+            success = self._download_export_data(export_path, self.download_progress_updated)
+            
+            if success:
+                export_folder_name = os.path.basename(export_path)
+                final_path = os.path.join(self.export_dir, export_folder_name)
+                self.export_completed.emit(True, f"导出完成，数据已保存到: {final_path}")
+            else:
+                self.export_completed.emit(False, "下载导出数据失败")
+                
+        except Exception as e:
+            self.export_completed.emit(False, f"导出过程异常: {e}")
+    
+    def _download_export_data(self, server_export_path, progress_callback):
+        """下载服务器导出的数据 - 逐个下载文件"""
+        try:
+            print(f"[DEBUG] 开始下载，服务器路径: {server_export_path}")
+            
+            # 创建子目录
+            export_folder_name = os.path.basename(server_export_path)
+            target_export_dir = os.path.join(self.export_dir, export_folder_name)
+            print(f"[DEBUG] 目标目录: {target_export_dir}")
+            
+            # 1. 获取文件列表
+            files_url = f"{self.api_client.base_url}/export/download_export/"
+            params = {'export_path': server_export_path}
+            
+            print(f"[DEBUG] 获取文件列表: {files_url}")
+            response = requests.get(files_url, params=params, timeout=30)
+            
+            if response.status_code != 200:
+                print(f"[DEBUG] 获取文件列表失败: {response.status_code}")
+                print(f"[DEBUG] 响应内容: {response.text}")
+                return False
+            
+            files_data = response.json()
+            files = files_data.get('files', [])
+            total_files = len(files)
+            
+            print(f"[DEBUG] 找到 {total_files} 个文件需要下载")
+            
+            if total_files == 0:
+                print(f"[DEBUG] 没有文件需要下载")
+                return True
+            
+            # 2. 逐个下载文件
+            downloaded_count = 0
+            for file_info in files:
+                file_path = file_info['path']
+                file_size = file_info['size']
+                
+                # 更新下载进度 (0-100%)
+                download_progress = int((downloaded_count / total_files) * 100)
+                progress_callback.emit(download_progress, f"正在下载: {file_path}")
+                
+                # 创建目标目录
+                target_file_path = os.path.join(target_export_dir, file_path)
+                target_dir = os.path.dirname(target_file_path)
+                os.makedirs(target_dir, exist_ok=True)
+                
+                # 下载单个文件 - 增加超时时间
+                file_url = f"{self.api_client.base_url}/export/download_file/"
+                file_params = {
+                    'export_path': server_export_path,
+                    'file_path': file_path
+                }
+                
+                try:
+                    # 根据文件大小调整超时时间
+                    timeout = max(120, file_size // (1024 * 1024) * 2)  # 每MB给2秒，最少120秒
+                    file_response = requests.get(file_url, params=file_params, timeout=timeout)
+                    
+                    if file_response.status_code == 200:
+                        with open(target_file_path, 'wb') as f:
+                            f.write(file_response.content)
+                        downloaded_count += 1
+                        print(f"[DEBUG] 文件下载成功: {file_path}")
+                    else:
+                        print(f"[DEBUG] 文件下载失败: {file_path}, 状态码: {file_response.status_code}")
+                        
+                except Exception as e:
+                    print(f"[DEBUG] 下载文件异常: {file_path}, 错误: {e}")
+                    continue
+            
+            return downloaded_count > 0
+                
+        except Exception as e:
+            print(f"[DEBUG] 下载导出数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
 
 class ExportManager:
@@ -24,13 +174,16 @@ class ExportManager:
         """
         self.db_controller = db_controller
         self.parent_widget = parent_widget
+        self.export_worker = None
+        self.export_progress_dialog = None
+        self.download_progress_dialog = None
     
     def export_data(self, takelist=None, open_folder=None):
         """
-        导出数据到选定文件夹
+        调用后端导出API，下载生成的CMAvatar_data目录到本地
         
         Args:
-            takelist: 录制列表，用于获取业务任务ID
+            takelist: 录制列表（不再使用，直接导出所有数据）
             open_folder: 默认打开文件夹路径
         """
         # 选择导出根目录
@@ -42,318 +195,79 @@ class ExportManager:
         if not export_dir:
             return
         
-        root_dir = os.path.join(export_dir, 'task_info')
-        os.makedirs(root_dir, exist_ok=True)
-        
-        try:
-            # 获取业务任务ID列表
-            business_task_ids = self._get_business_task_ids(takelist)
-            
-            if not business_task_ids:
-                QMessageBox.information(
-                    self.parent_widget, 
-                    "导出", 
-                    "没有可导出的任务"
-                )
-                return
-            
-            # 导出task_info数据
-            exported_count = self._export_task_info_data(root_dir, business_task_ids)
-            
-            # 导出视频文件
-            self._export_video_files(export_dir, business_task_ids, exported_count)
-            
-        except Exception as e:
+        # 检查是否已有导出任务在运行
+        if self.export_worker and self.export_worker.isRunning():
             QMessageBox.warning(
                 self.parent_widget, 
-                "导出失败", 
-                f"导出发生异常: {e}"
+                "导出进行中", 
+                "已有导出任务在运行，请等待完成后再试"
             )
+            return
+        
+        # 创建导出进度对话框
+        self.export_progress_dialog = QProgressDialog("正在导出数据...", "取消", 0, 100, self.parent_widget)
+        self.export_progress_dialog.setWindowTitle("数据导出")
+        self.export_progress_dialog.setMinimumDuration(0)
+        self.export_progress_dialog.setValue(0)
+        
+        # 创建并启动导出工作线程
+        self.export_worker = ExportWorker(self.db_controller.api_client, export_dir)
+        self.export_worker.export_progress_updated.connect(self._on_export_progress_updated)
+        self.export_worker.download_progress_updated.connect(self._on_download_progress_updated)
+        self.export_worker.export_completed.connect(self._on_export_completed)
+        self.export_worker.start()
     
-    def _get_business_task_ids(self, takelist):
-        """
-        获取业务任务ID列表
-        
-        Args:
-            takelist: 录制列表
-            
-        Returns:
-            list: 业务任务ID列表
-        """
-        business_task_ids = []
-        
-        # 优先从当前会话的录制条目收集业务task_id
-        if takelist:
-            for take in takelist:
-                if getattr(take, '_task_id', None):
-                    business_task_ids.append(str(take._task_id))
-            # 去重
-            business_task_ids = list(dict.fromkeys(business_task_ids))
-        
-        # 如果当前会话没有可用业务ID，则从后端读取所有TaskInfo
-        if not business_task_ids:
-            resp = self.db_controller.list_task_infos(limit=1000, offset=0) or []
-            if isinstance(resp, dict):
-                items = resp.get('results', []) or []
-            elif isinstance(resp, list):
-                items = resp
-            else:
-                items = []
-            
-            biz_set = []
-            for it in items:
-                try:
-                    if isinstance(it, dict) and it.get('task_id'):
-                        biz_set.append(str(it.get('task_id')))
-                except Exception:
-                    continue
-            business_task_ids = list(dict.fromkeys(biz_set))
-        
-        return business_task_ids
+    def _on_export_progress_updated(self, progress, message):
+        """更新导出进度"""
+        if self.export_progress_dialog:
+            self.export_progress_dialog.setValue(progress)
+            self.export_progress_dialog.setLabelText(message)
     
-    def _export_task_info_data(self, root_dir, business_task_ids):
-        """
-        导出task_info数据
+    def _on_download_progress_updated(self, progress, message):
+        """更新下载进度"""
+        # 如果导出进度对话框还在显示，先关闭它
+        if self.export_progress_dialog:
+            self.export_progress_dialog.close()
+            self.export_progress_dialog = None
         
-        Args:
-            root_dir: 导出根目录
-            business_task_ids: 业务任务ID列表
-            
-        Returns:
-            int: 导出的任务数量
-        """
-        exported = 0
-        total_tasks = len(business_task_ids)
+        # 创建下载进度对话框
+        if not self.download_progress_dialog:
+            self.download_progress_dialog = QProgressDialog("正在下载文件...", "取消", 0, 100, self.parent_widget)
+            self.download_progress_dialog.setWindowTitle("文件下载")
+            self.download_progress_dialog.setMinimumDuration(0)
+            self.download_progress_dialog.setValue(0)
+            self.download_progress_dialog.show()
         
-        # 创建进度条
-        progress = QProgressDialog("正在导出 task_info...", None, 0, total_tasks, self.parent_widget)
-        progress.setWindowTitle("导出")
-        progress.setCancelButton(None)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        
-        for idx, biz_id in enumerate(business_task_ids, start=1):
-            progress.setLabelText(f"正在导出 task_info: {biz_id} ({idx}/{total_tasks})")
-            progress.setValue(idx - 1)
-            QCoreApplication.processEvents()
-            
-            # 从后端拉取全部TaskInfo并过滤出该业务ID的所有episode
-            resp = self.db_controller.list_task_infos(limit=2000, offset=0) or []
-            if isinstance(resp, dict):
-                items = resp.get('results', []) or []
-            elif isinstance(resp, list):
-                items = resp
-            else:
-                items = []
-            
-            matched = [it for it in items if isinstance(it, dict) and str(it.get('task_id')) == str(biz_id)]
-            if not matched:
-                continue
-            
-            # 构建导出数据
-            export_array = []
-            for data in matched:
-                export_array.append({
-                    "episode_id": int(data.get('episode_id') or data.get('id')),
-                    "label_info": {"action_config": data.get('action_config', [])},
-                    "task_name": data.get('task_name', ''),
-                    "init_scene_text": data.get('init_scene_text', '')
-                })
-            
-            # 写入文件
-            output_file = os.path.join(root_dir, f"{biz_id}.json")
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(export_array, f, ensure_ascii=False, indent=2)
-            exported += 1
-        
-        progress.setValue(total_tasks)
-        return exported
+        self.download_progress_dialog.setValue(progress)
+        self.download_progress_dialog.setLabelText(message)
+        QCoreApplication.processEvents()
     
-    def _export_video_files(self, export_dir, business_task_ids, task_info_count):
-        """
-        导出视频文件到指定目录结构
+    def _on_export_completed(self, success, message):
+        """导出完成回调"""
+        # 关闭所有进度对话框
+        if self.export_progress_dialog:
+            self.export_progress_dialog.close()
+            self.export_progress_dialog = None
         
-        Args:
-            export_dir: 导出根目录
-            business_task_ids: 业务任务ID列表
-            task_info_count: 已导出的任务信息数量
-        """
-        try:
-            # 获取所有observations数据
-            observations_data = self.db_controller.list_observations(limit=2000, offset=0) or []
-            if not observations_data:
-                print("没有找到observations数据，跳过视频文件导出")
-                QMessageBox.information(
-                    self.parent_widget, 
-                    "导出完成", 
-                    f"已导出 {task_info_count} 个任务信息到: {export_dir}"
-                )
-                return
-            
-            # 检查observations数据格式
-            if not isinstance(observations_data, list):
-                print(f"observations数据格式错误: {type(observations_data)}")
-                QMessageBox.information(
-                    self.parent_widget, 
-                    "导出完成", 
-                    f"已导出 {task_info_count} 个任务信息到: {export_dir}"
-                )
-                return
-            
-            # 按task_id分组observations
-            observations_by_task = self._group_observations_by_task(observations_data, business_task_ids)
-            
-            if not observations_by_task:
-                print("没有找到匹配的observations数据，跳过视频文件导出")
-                QMessageBox.information(
-                    self.parent_widget, 
-                    "导出完成", 
-                    f"已导出 {task_info_count} 个任务信息到: {export_dir}"
-                )
-                return
-            
-            # 创建observations目录并导出视频文件
-            observations_dir = os.path.join(export_dir, 'observations')
-            os.makedirs(observations_dir, exist_ok=True)
-            
-            exported_episodes = self._copy_video_files(observations_dir, observations_by_task)
-            
+        if self.download_progress_dialog:
+            self.download_progress_dialog.close()
+            self.download_progress_dialog = None
+        
+        if success:
             QMessageBox.information(
                 self.parent_widget, 
                 "导出完成", 
-                f"已导出 {task_info_count} 个任务信息和 {exported_episodes} 个episode的视频文件到: {export_dir}"
+                message
             )
-            
-        except Exception as e:
-            print(f"导出视频文件失败: {e}")
+        else:
             QMessageBox.warning(
                 self.parent_widget, 
                 "导出失败", 
-                f"导出视频文件失败: {e}"
+                message
             )
+        
+        # 清理工作线程
+        if self.export_worker:
+            self.export_worker.deleteLater()
+            self.export_worker = None
     
-    def _group_observations_by_task(self, observations_data, business_task_ids):
-        """
-        按task_id分组observations数据
-        
-        Args:
-            observations_data: observations数据列表
-            business_task_ids: 业务任务ID列表
-            
-        Returns:
-            dict: 按task_id分组的observations数据
-        """
-        observations_by_task = {}
-        
-        for obs in observations_data:
-            # 检查obs是否为字典类型
-            if not isinstance(obs, dict):
-                print(f"跳过非字典类型的observation数据: {type(obs)}")
-                continue
-            
-            # 通过task_info获取task_id
-            task_info_id = obs.get('task_info')
-            if task_info_id:
-                # 获取对应的task_info
-                task_info = self.db_controller.get_task(task_info_id)
-                if task_info and isinstance(task_info, dict):
-                    biz_task_id = str(task_info.get('task_id', ''))
-                    if biz_task_id in business_task_ids:
-                        if biz_task_id not in observations_by_task:
-                            observations_by_task[biz_task_id] = []
-                        observations_by_task[biz_task_id].append(obs)
-        
-        return observations_by_task
-    
-    def _copy_video_files(self, observations_dir, observations_by_task):
-        """
-        复制视频文件到目标目录
-        
-        Args:
-            observations_dir: observations目录路径
-            observations_by_task: 按task_id分组的observations数据
-            
-        Returns:
-            int: 导出的episode数量
-        """
-        # 计算总进度
-        total_episodes = sum(len(episodes) for episodes in observations_by_task.values())
-        progress = QProgressDialog("正在导出视频文件...", None, 0, total_episodes, self.parent_widget)
-        progress.setWindowTitle("导出视频")
-        progress.setCancelButton(None)
-        progress.setMinimumDuration(0)
-        progress.setValue(0)
-        
-        exported_episodes = 0
-        
-        for biz_task_id, episodes in observations_by_task.items():
-            # 创建task_id目录
-            task_dir = os.path.join(observations_dir, biz_task_id)
-            os.makedirs(task_dir, exist_ok=True)
-            
-            for episode in episodes:
-                # 检查episode是否为字典类型
-                if not isinstance(episode, dict):
-                    print(f"跳过非字典类型的episode数据: {type(episode)}")
-                    continue
-                
-                episode_id = str(episode.get('episode_id', ''))
-                video_path = episode.get('video_path', '')
-                depth_path = episode.get('depth_path', '')
-                
-                # 检查是否有有效的视频或深度路径
-                has_video_files = video_path and os.path.exists(video_path)
-                has_depth_files = depth_path and os.path.exists(depth_path)
-                
-                if not has_video_files and not has_depth_files:
-                    print(f"Episode {episode_id} 没有有效的视频或深度文件路径，跳过")
-                    continue
-                
-                # 创建episode_id目录
-                episode_dir = os.path.join(task_dir, episode_id)
-                videos_dir = os.path.join(episode_dir, 'videos')
-                depth_dir = os.path.join(episode_dir, 'depth')
-                os.makedirs(videos_dir, exist_ok=True)
-                os.makedirs(depth_dir, exist_ok=True)
-                
-                # 更新进度
-                exported_episodes += 1
-                progress.setLabelText(f"正在导出视频: {biz_task_id}/{episode_id} ({exported_episodes}/{total_episodes})")
-                progress.setValue(exported_episodes - 1)
-                QCoreApplication.processEvents()
-                
-                # 复制视频文件
-                if has_video_files:
-                    self._copy_files_from_directory(video_path, videos_dir, "视频")
-                
-                # 复制深度文件
-                if has_depth_files:
-                    self._copy_files_from_directory(depth_path, depth_dir, "深度")
-        
-        progress.setValue(total_episodes)
-        return exported_episodes
-    
-    def _copy_files_from_directory(self, file_path, dest_dir, file_type):
-        """
-        从指定目录复制所有文件到目标目录
-        
-        Args:
-            file_path: 源文件路径
-            dest_dir: 目标目录
-            file_type: 文件类型（用于日志）
-        """
-        try:
-            # 获取目录下所有文件
-            source_dir = os.path.dirname(file_path)
-            if os.path.exists(source_dir):
-                files = glob.glob(os.path.join(source_dir, '*'))
-                for file_path in files:
-                    if os.path.isfile(file_path):
-                        filename = os.path.basename(file_path)
-                        dest_path = os.path.join(dest_dir, filename)
-                        shutil.copy2(file_path, dest_path)
-                        print(f"复制{file_type}文件: {file_path} -> {dest_path}")
-            else:
-                print(f"{file_type}目录不存在: {source_dir}")
-        except Exception as e:
-            print(f"复制{file_type}文件失败: {e}")

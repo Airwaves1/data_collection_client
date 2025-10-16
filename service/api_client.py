@@ -253,3 +253,20 @@ class DataCollectionAPIClient:
         """获取采集者信息"""
         endpoint = f"collectors/{collector_id}/"
         return self._make_request('GET', endpoint)
+    
+    # -------- 导出 API --------
+    def start_export(self) -> Optional[Dict[str, Any]]:
+        """启动后端导出"""
+        endpoint = "export/export_all/"
+        return self._make_request('POST', endpoint)
+    
+    def get_export_status(self, export_id: str) -> Optional[Dict[str, Any]]:
+        """查询导出状态"""
+        endpoint = "export/status/"
+        params = {'export_id': export_id}
+        return self._make_request('GET', endpoint, params=params)
+    
+    def list_exports(self) -> Optional[Dict[str, Any]]:
+        """列出所有导出任务"""
+        endpoint = "export/list/"
+        return self._make_request('GET', endpoint)

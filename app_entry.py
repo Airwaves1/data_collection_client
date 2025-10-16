@@ -36,7 +36,28 @@ if __name__ == '__main__':
     # Get current work folder.
     cur_work_dir = os.getcwd()
     mylogger.info(f'Current work directory: {cur_work_dir}')
-    sys.path.append(cur_work_dir + '\\python')
+    
+    # 添加python目录到Python路径
+    # 在打包环境中，python模块在_internal目录中
+    internal_python_path = os.path.join(cur_work_dir, '_internal', 'python')
+    if os.path.exists(internal_python_path):
+        sys.path.insert(0, internal_python_path)
+        mylogger.info(f'Added internal python path: {internal_python_path}')
+    else:
+        # 尝试在当前目录查找
+        python_path = os.path.join(cur_work_dir, 'python')
+        if os.path.exists(python_path):
+            sys.path.insert(0, python_path)
+            mylogger.info(f'Added python path: {python_path}')
+        else:
+            # 尝试在exe文件所在目录查找
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            exe_python_path = os.path.join(exe_dir, 'python')
+            if os.path.exists(exe_python_path):
+                sys.path.insert(0, exe_python_path)
+                mylogger.info(f'Added exe python path: {exe_python_path}')
+            else:
+                mylogger.error('Python module path not found')
 
     main_win = MainWindow()
     #main_win.setGeometry(50, 50, 1280, 960)

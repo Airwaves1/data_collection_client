@@ -20,7 +20,6 @@ import app_common
 import mainwnd_rc
 
 from dialog_takeitem import TakeItemDialog
-from dialog_fbxmerge import FbxMergeDialog
 from login_dialog import LoginDialog
 
 import mylogger
@@ -127,8 +126,6 @@ class MainWindow(QMainWindow):
         # 下载队列管理
         self._is_downloading = False  # 当前是否正在下载
 
-        self.mod_merge_fbx = None
-        self.func_merge_fbx = None
         self.init_device_list = []
         self.init_shot_list = []
 
@@ -215,6 +212,14 @@ class MainWindow(QMainWindow):
         
         # 更新状态栏显示当前用户
         self.statusBar().showMessage(f"当前用户: {user_info.get('collector_name', 'Unknown')}")
+        
+        # 更新右下角永久标签显示：组织_ID号_姓名
+        collector_id = user_info.get('collector_id', 'Unknown')
+        collector_name = user_info.get('collector_name', 'Unknown')
+        collector_organization = user_info.get('collector_organization', 'Unknown')
+        
+        display_text = f"{collector_organization}_{collector_id}_{collector_name}"
+        self._collector_label.setText(display_text)
         
         # 可以在这里添加其他登录后的初始化操作
         mylogger.info(f"用户登录成功: {user_info.get('username', 'Unknown')}")
@@ -1020,84 +1025,6 @@ class MainWindow(QMainWindow):
         else:
             return "Manipulate"  # 默认技能类型
 
-    def merge_motion_file(self):
-        merge_list = {}
-        row_count = self.generate_merge_list(merge_list)
-        settings = self.mod_peel.get_settings()
-        dlgFbxMerge = FbxMergeDialog(settings, merge_list, row_count, self)
-        dlgFbxMerge.exec_()
-        dlgFbxMerge.deleteLater()
-
-    def generate_merge_list(self, merge_list):
-        devices = self.mod_peel.get_devices_data()
-        tracker_devices = []
-        vrtrix_devices = {}
-        row_count = 0
-        #将CMTracker与手套设备进行分类
-        for d in devices:
-            device_type = d[0]
-            if device_type == 'CMTracker' or device_type == 'CMAvatar':
-                device_name = d[1]['name']
-                tracker_devices.append(d[1])
-                
-            elif device_type == 'Vrtrix':
-                device_name = d[1]['name']
-                vrtrix_devices[device_name] = d[1]
-            
-        for td in tracker_devices:
-            device_name = td['name']
-            device_takes = td['takes']
-            shot_items = []
-            row_count += 1
-            for key, value in device_takes.items():
-                track_fbx = self.filterFbxFile(value)
-
-                # fbx文件还未下载至本地
-                if track_fbx is None or len(track_fbx) == 0:
-                    mylogger.error(f'Device: [{device_name}], {key} {value} get track fbx file failed.')
-                    continue
-
-                hand_files = []
-                #TODO should make relation
-                for vr_key, vr_value in vrtrix_devices.items():
-                    vr_takes = vr_value['takes']
-                    if vr_takes is None or len(vr_takes) == 0:
-                        continue
-
-                    if key in vr_takes:
-                        vr_files = vr_takes[key]['local_files']
-                        if vr_files is not None and len(vr_files) > 0:
-                            # vr_fbx = self.filterFbxFile(vr_files)
-                            # 在列表末尾一次性追加另一个序列中的多个值
-                            hand_files.extend(vr_files)
-                    
-                item = {'shot_name': key, 'body_fullpath': track_fbx, 'hand_files': hand_files }
-                shot_items.append(item)
-                row_count += 1
-
-            merge_list[device_name] = shot_items
-
-        return row_count
-
-    # filter fbx file from file list
-    def filterFbxFile(self, dict_take):
-        arr_files = dict_take['local_files']
-
-        if "skeleton_index" in dict_take:
-            # CMTracker拆分骨骼
-            arr_human_index = dict_take['skeleton_index']
-            if arr_human_index is not None and len(arr_human_index) > 0:
-                for idx in arr_human_index:
-                    return arr_files[idx]
-
-        # 未拆分骨骼
-        for f in arr_files:
-            (file_name, file_ext) = os.path.splitext(f)
-            if file_ext == '.fbx':
-                fbx_body = f
-                return f
-        return None
-    
     def set_english(self):
         self.switch_language(app_const.Lang_ENG)
         pass
@@ -1130,15 +1057,11 @@ class MainWindow(QMainWindow):
         
         icon = QIcon(':/images/download_files')
         self._collect_file_act = QAction(icon, self.tr("Collect File"), self, shortcut="Ctrl+E",
-                statusTip=self.tr("Collect file from remote devices"), triggered=self.collect_file)
-
-        icon = QIcon(':/images/merge_files')
-        self._merge_file_act = QAction(icon, self.tr("Merge Motion File"), self, shortcut="Ctrl+M",
-                statusTip=self.tr("Merge motion file with body and hand fbx file"), triggered=self.merge_motion_file)
+                statusTip=self.tr("将录制文件下载保存"), triggered=self.collect_file)
 
         icon = QIcon(':/images/export_files')
         self._export_file_act = QAction(icon, self.tr("Export File"), self, shortcut="Ctrl+B",
-                statusTip=self.tr("Export file from avatar"), triggered=self.export_file)
+                statusTip=self.tr("从服务器导出文件到指定文件夹"), triggered=self.export_file)
 
         # 创建两个动作，分别表示英语和中文
         # self._eng_act = QAction("English", self)
@@ -1163,7 +1086,6 @@ class MainWindow(QMainWindow):
 
         self._publish_menu = self.menuBar().addMenu(self.tr("&Publish"))
         self._publish_menu.addAction(self._collect_file_act)
-        self._publish_menu.addAction(self._merge_file_act)
         self._publish_menu.addAction(self._export_file_act)
 
         self.menuBar().addSeparator()
@@ -1193,13 +1115,14 @@ class MainWindow(QMainWindow):
         self._file_tool_bar.addSeparator()
 
         self._file_tool_bar.addAction(self._collect_file_act)
-        self._file_tool_bar.addAction(self._merge_file_act)
         self._file_tool_bar.addAction(self._export_file_act)
 
     def create_status_bar(self):
         self.statusBar().showMessage("就绪...", 2000)
         # 显示当前采集者
         self._collector_label = QLabel(self.tr("未登录采集者"))
+        # 设置右边距，避免文字太靠右
+        self._collector_label.setStyleSheet("QLabel { margin-right: 20px; }")
         self.statusBar().addPermanentWidget(self._collector_label)
 
     def create_takelist(self, splitter):
