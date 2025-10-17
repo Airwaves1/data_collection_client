@@ -35,11 +35,7 @@ datas = [
 ]
 
 # 收集二进制文件
-binaries = [
-    ('FbxMergeHelper.dll', '.'),
-    ('libfbxsdk.dll', '.'),
-    ('Qt6Core.dll', '.'),
-]
+binaries = []
 
 a = Analysis(
     ['app_entry.py'],
@@ -66,13 +62,13 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,  # 无控制台窗口
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='images/app_icon.png',  # 暂时注释掉图标，避免PIL依赖
+    icon='images/app_icon.png',
 )
 
 coll = COLLECT(

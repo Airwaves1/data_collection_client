@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
     QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
-                   QLineEdit, QListWidget, QTextEdit, QComboBox)
+                   QLineEdit, QListWidget, QTextEdit, QComboBox, QProgressBar)
 
 from PySide6.QtGui import QColor
 from PySide6.QtGui import QRegularExpressionValidator
@@ -126,6 +126,11 @@ class MainWindow(QMainWindow):
         # 下载队列管理
         self._is_downloading = False  # 当前是否正在下载
 
+        # 采集导出进度对话框状态
+        self._collect_progress_dialog = None
+        self._collect_total = 0
+        self._collect_done = 0
+
         self.init_device_list = []
         self.init_shot_list = []
 
@@ -210,6 +215,9 @@ class MainWindow(QMainWindow):
         self.current_collector = user_info
         self.is_logged_in = True
         
+        # 调试信息：打印用户信息
+        print(f"[DEBUG] 登录成功的用户信息: {user_info}")
+        
         # 更新状态栏显示当前用户
         self.statusBar().showMessage(f"当前用户: {user_info.get('collector_name', 'Unknown')}")
         
@@ -221,6 +229,9 @@ class MainWindow(QMainWindow):
         display_text = f"{collector_organization}_{collector_id}_{collector_name}"
         self._collector_label.setText(display_text)
         
+        # 加载当前采集者的所有任务数据
+        self.load_collector_tasks()
+        
         # 可以在这里添加其他登录后的初始化操作
         mylogger.info(f"用户登录成功: {user_info.get('username', 'Unknown')}")
         
@@ -230,6 +241,136 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "未登录", "请先登录后再进行操作")
             return False
         return True
+
+    def load_collector_tasks(self):
+        """加载当前采集者的所有任务数据"""
+        if not self.current_collector:
+            print("[WARN] 没有当前采集者信息，无法加载任务数据")
+            return
+        
+        try:
+            collector_id = self.current_collector.get('collector_id')
+            if not collector_id:
+                print("[WARN] 采集者ID为空，无法加载任务数据")
+                return
+            
+            print(f"[INFO] 开始加载采集者 {collector_id} 的任务数据...")
+            
+            # 从数据库获取任务列表
+            tasks = self.db_controller.list_tasks_by_collector(collector_id, limit=1000, offset=0)
+            
+            if not tasks:
+                print("[INFO] 没有找到任务数据")
+                return
+            
+            print(f"[INFO] 找到 {len(tasks)} 个任务，开始转换...")
+            
+            # 清空当前任务列表
+            self._takelist.clear()
+            self._dict_takename.clear()
+            
+            # 按创建时间排序（最新的在前）
+            def sort_key(task):
+                created_at = task.get('created_at', '')
+                if isinstance(created_at, str):
+                    try:
+                        from datetime import datetime
+                        return datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    except:
+                        return datetime.min
+                elif created_at:
+                    return created_at
+                else:
+                    return datetime.min
+            
+            tasks.sort(key=sort_key, reverse=True)
+            
+            # 转换数据库任务为TakeItem对象
+            for task_data in tasks:
+                try:
+                    take_item = self._convert_db_task_to_take_item(task_data)
+                    if take_item:
+                        self._takelist.append(take_item)
+                        # 添加到字典中用于查找
+                        self._dict_takename[take_item._task_id] = take_item
+                except Exception as e:
+                    print(f"[ERROR] 转换任务数据失败: {task_data.get('task_id', 'Unknown')}, 错误: {e}")
+                    continue
+            
+            # 更新UI显示
+            self._update_task_list_ui()
+            
+            print(f"[INFO] 成功加载 {len(self._takelist)} 个任务到任务列表")
+            
+        except Exception as e:
+            print(f"[ERROR] 加载采集者任务数据失败: {e}")
+            QMessageBox.warning(self, "加载失败", f"加载任务数据失败: {e}")
+
+    def _convert_db_task_to_take_item(self, task_data):
+        """将数据库任务数据转换为TakeItem对象"""
+        try:
+            # 创建TakeItem对象
+            take_item = TakeItem()
+            
+            # 设置基本信息
+            take_item._task_id = str(task_data.get('task_id', ''))
+            # 使用数据库中的任务名称（现在保存的是中文名称，如果有的话）
+            take_item._task_name = task_data.get('task_name', '')
+            take_item._episode_id = task_data.get('episode_id', '')
+            
+            # 设置时间信息
+            created_at = task_data.get('created_at')
+            if created_at:
+                if isinstance(created_at, str):
+                    # 如果是字符串，尝试解析
+                    from datetime import datetime
+                    try:
+                        created_at = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    except:
+                        created_at = datetime.now()
+                take_item._start_time = created_at
+                take_item._end_time = created_at  # 暂时使用相同时间
+            else:
+                take_item._start_time = datetime.now()
+                take_item._end_time = datetime.now()
+            
+            # 计算持续时间（暂时设为0）
+            take_item._due = 0.0
+            
+            # 设置其他信息
+            take_item._take_notes = task_data.get('init_scene_text', '')
+            take_item._take_desc = task_data.get('task_name', '')
+            
+            # 设置动作配置
+            action_config = task_data.get('action_config', [])
+            if isinstance(action_config, str):
+                try:
+                    import json
+                    action_config = json.loads(action_config)
+                except:
+                    action_config = []
+            take_item._actions = action_config if isinstance(action_config, list) else []
+            
+            return take_item
+            
+        except Exception as e:
+            print(f"[ERROR] 转换任务数据失败: {e}")
+            return None
+
+    def _update_task_list_ui(self):
+        """更新任务列表UI显示"""
+        try:
+            row_count = len(self._takelist)
+            self._table_takelist.setRowCount(row_count)
+            
+            # 更新每一行
+            for row, take_item in enumerate(self._takelist):
+                self.updateTakeRow(row, take_item)
+            
+            print(f"[INFO] 任务列表UI已更新，显示 {row_count} 个任务")
+            
+        except Exception as e:
+            print(f"[ERROR] 更新任务列表UI失败: {e}")
 
     # 当主窗口关闭，子窗口也关闭
     def closeEvent(self, event):
@@ -497,27 +638,33 @@ class MainWindow(QMainWindow):
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 0, twItem)
 
+        # 录制ID (episode_id)
+        episode_id = getattr(take_item, '_episode_id', '')
+        twItem = QTableWidgetItem(episode_id)
+        twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+        self._table_takelist.setItem(row, 1, twItem)
+
         # 任务名称
         twItem = QTableWidgetItem(take_item._task_name)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 1, twItem)
+        self._table_takelist.setItem(row, 2, twItem)
         
         # 开始时间
         twItem = QTableWidgetItem(take_item._start_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 2, twItem)
+        self._table_takelist.setItem(row, 3, twItem)
 
         # 结束时间
         twItem = QTableWidgetItem(take_item._end_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 3, twItem)
+        self._table_takelist.setItem(row, 4, twItem)
 
         # 持续时间
         twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_item._due)} sec")
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 4, twItem)
+        self._table_takelist.setItem(row, 5, twItem)
         
-        # 状态下拉框（仅两个选项，默认“接受”）
+        # 状态下拉框（仅两个选项，默认"接受"）
         status_combo = QComboBox()
         status_combo.addItems(["接受", "拒绝"])  # 仅保留两个选项
         status_combo.setCurrentText("接受")
@@ -525,7 +672,7 @@ class MainWindow(QMainWindow):
         # 连接状态变更事件
         status_combo.currentTextChanged.connect(lambda text, r=row: self.on_status_changed(r, text))
         
-        self._table_takelist.setCellWidget(row, 5, status_combo)
+        self._table_takelist.setCellWidget(row, 6, status_combo)
 
     def on_status_changed(self, row, status_text):
         """处理状态变更事件"""
@@ -668,6 +815,14 @@ class MainWindow(QMainWindow):
         # 连接CMAvatar设备信号（如果还没有连接）
         self.connect_avatar_signals()
         
+        # 计算本次需要导出的总数（以当前录制条目数为准）
+        try:
+            self._collect_total = max(1, len(self._takelist))
+        except Exception:
+            self._collect_total = 1
+        self._collect_done = 0
+        self._show_collect_progress_dialog()
+
         # 发送导出命令（设备将按任务逐条回调 exportFinish，多次触发）
         # try:
         self.mod_peel.command('Export', '')
@@ -775,19 +930,23 @@ class MainWindow(QMainWindow):
                 notes_list = take_item._take_notes.split('\n') if take_item._take_notes else []
                 action_config = self._parse_actions_to_config(notes_list, take_item._actions, task_info)
                 
-                # 使用英文任务名称
+                # 优先使用中文任务名称，如果没有则使用英文名称
+                task_name_cn = self._clean_text(task_info.get('task_name_cn', ''))
                 task_name_en = self._clean_text(task_info.get('task_name_en', ''))
-                if not task_name_en:
-                    task_name_en = self._clean_text(take_item._take_desc)
+                
+                # 确定最终使用的任务名称（优先中文）
+                final_task_name = task_name_cn if task_name_cn else task_name_en
+                if not final_task_name:
+                    final_task_name = self._clean_text(take_item._take_desc)
                 
                 # 使用场景信息
                 scene_text = self._clean_text(task_info.get('scenarios', ''))
                 if not scene_text:
-                    scene_text = f"Task {task_id}: {task_name_en}"
+                    scene_text = f"Task {task_id}: {final_task_name}"
                 
                 # 更新现有的TaskInfo记录，而不是创建新的
                 update_data = {
-                    'task_name': task_name_en,
+                    'task_name': final_task_name,  # 保存中文名称（如果有的话）
                     'init_scene_text': scene_text,
                     'action_config': action_config,
                     'task_status': 'pending'  # 默认为待审核状态
@@ -1130,6 +1289,7 @@ class MainWindow(QMainWindow):
         takelistWidget = QTableWidget(splitter)
         # 设置列名 - 优化后的列名
         header_labels = ["任务ID", 
+                         "录制ID", 
                          "任务名称", 
                          "开始时间", 
                          "结束时间", 
@@ -1151,11 +1311,12 @@ class MainWindow(QMainWindow):
 
         # 设置列宽
         takelistWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 任务ID
-        takelistWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)           # 任务名称
-        takelistWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 开始时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 结束时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 持续时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)   # 状态
+        takelistWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 录制ID
+        takelistWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)           # 任务名称
+        takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 开始时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 结束时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 持续时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 状态
 
         return takelistWidget
     
@@ -1792,6 +1953,9 @@ class MainWindow(QMainWindow):
         self._waiting_for_export = False
         
         if export_result and take_name and file_paths:
+            # 更新非模态进度条
+            self._collect_done = max(0, self._collect_done + 1)
+            self._update_collect_progress_dialog()
             # 停止超时定时器
             if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
                 try:
@@ -1808,6 +1972,46 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"导出失败: {export_message}", 3000)
             print(f"[ERROR] 导出失败: {export_message}")
             QMessageBox.warning(self, "导出失败", f"设备导出失败: {export_message}")
+
+    def _show_collect_progress_dialog(self):
+        """显示非模态采集导出进度对话框，可随时关闭不阻塞操作"""
+        try:
+            if self._collect_progress_dialog is None:
+                dlg = QDialog(self)
+                dlg.setWindowTitle("采集导出进度")
+                dlg.setModal(False)
+                # 构建UI
+                v = QVBoxLayout(dlg)
+                lbl = QLabel("正在导出...")
+                bar = QProgressBar()
+                bar.setRange(0, 100)
+                bar.setValue(0)
+                v.addWidget(lbl)
+                v.addWidget(bar)
+                # 保存引用
+                dlg._lbl = lbl
+                dlg._bar = bar
+                self._collect_progress_dialog = dlg
+            # 初始化显示
+            self._update_collect_progress_dialog()
+            self._collect_progress_dialog.show()
+        except Exception as e:
+            print(f"[WARN] 显示进度对话框失败: {e}")
+
+    def _update_collect_progress_dialog(self):
+        """根据当前计数更新对话框显示"""
+        try:
+            if not self._collect_progress_dialog:
+                return
+            total = max(1, int(self._collect_total or 1))
+            done = max(0, int(self._collect_done or 0))
+            pct = int(min(100, (done / total) * 100))
+            self._collect_progress_dialog._bar.setValue(pct)
+            self._collect_progress_dialog._lbl.setText(f"已完成 {done}/{total}")
+            if done >= total:
+                self._collect_progress_dialog._lbl.setText(f"已完成 {done}/{total}（完成）")
+        except Exception as e:
+            print(f"[WARN] 更新进度对话框失败: {e}")
 
     def _send_to_fileservice(self, take_name, file_paths):
         """发送文件路径给fileservice"""
@@ -1988,6 +2192,8 @@ class MainWindow(QMainWindow):
                 task_id = getattr(last_take, '_task_id', None)
                 if task_id is not None:
                     self._save_task_to_database(task_id, [last_take])
+                    # 保存成功后，重新加载任务列表以显示最新数据
+                    self.load_collector_tasks()
         except Exception as e:
             print(f"[WARN] 停止后保存数据库失败: {e}")
 

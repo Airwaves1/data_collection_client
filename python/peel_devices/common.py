@@ -1,4 +1,4 @@
-#CMTracker, Vrtrix and all file download
+# CMTracker, Vrtrix and all file download
 # Request
 cmd_req_heatbeat = '/control/heartbeat'
 cmd_req_record = '/control/record'

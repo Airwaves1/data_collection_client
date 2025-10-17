@@ -268,6 +268,7 @@ class CMAvatar(PeelDeviceBase):
                 'device_ip': self.device_ip,
                 'device_port': self.device_port,
                 'remotetool_port': self.remotetool_port,
+                'fileservice_port': self.fileservice_port,
                 'listen_ip': self.listen_ip,
                 'listen_port': self.listen_port,
                 'takes': self.takes

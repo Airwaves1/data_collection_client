@@ -102,6 +102,48 @@ class TaskDataManager:
     def load_from_excel(self, file_path: str) -> bool:
         """从Excel文件加载数据"""
         try:
+            import os
+            import sys
+            
+            print(f"[DEBUG] 开始加载Excel文件: {file_path}")
+            print(f"[DEBUG] 当前工作目录: {os.getcwd()}")
+            print(f"[DEBUG] 是否为绝对路径: {os.path.isabs(file_path)}")
+            
+            # 处理路径问题
+            original_path = file_path
+            if not os.path.isabs(file_path):
+                # 如果是相对路径，尝试多个可能的基路径
+                possible_paths = [
+                    file_path,  # 当前工作目录
+                    os.path.join(os.getcwd(), file_path),  # 当前工作目录
+                    os.path.join(os.path.dirname(os.path.abspath(sys.executable)), file_path),  # exe所在目录
+                ]
+                
+                print(f"[DEBUG] 尝试的路径列表: {possible_paths}")
+                
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        file_path = os.path.abspath(path)
+                        print(f"[DEBUG] 找到有效路径: {file_path}")
+                        break
+                else:
+                    print(f"[ERROR] Excel文件不存在，尝试的路径: {possible_paths}")
+                    return False
+            else:
+                file_path = os.path.abspath(file_path)
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                print(f"[ERROR] Excel文件不存在: {file_path}")
+                return False
+                
+            # 检查文件权限
+            if not os.access(file_path, os.R_OK):
+                print(f"[ERROR] 没有读取Excel文件的权限: {file_path}")
+                return False
+            
+            print(f"[DEBUG] 最终使用的Excel文件路径: {file_path}")
+            print(f"[DEBUG] 文件大小: {os.path.getsize(file_path)} 字节")
             
             # 读取Excel文件，指定引擎
             df = pd.read_excel(file_path, engine='openpyxl')
@@ -138,10 +180,29 @@ class TaskDataManager:
                 else:
                     invalid_tasks += 1
             
+            print(f"[DEBUG] 成功加载 {valid_tasks} 个有效任务，跳过 {invalid_tasks} 个无效任务")
             return True
             
+        except FileNotFoundError as e:
+            print(f"[ERROR] Excel文件未找到: {e}")
+            return False
+        except PermissionError as e:
+            print(f"[ERROR] 没有权限访问Excel文件: {e}")
+            return False
+        except pd.errors.EmptyDataError as e:
+            print(f"[ERROR] Excel文件为空: {e}")
+            return False
+        except pd.errors.ExcelFileError as e:
+            print(f"[ERROR] Excel文件格式错误: {e}")
+            return False
+        except ImportError as e:
+            print(f"[ERROR] 缺少必要的库: {e}")
+            print(f"[ERROR] 请确保已安装 openpyxl: pip install openpyxl")
+            return False
         except Exception as e:
             import traceback
+            print(f"[ERROR] 加载Excel文件时发生未知错误: {e}")
+            print(f"[ERROR] 错误详情:")
             traceback.print_exc()
             return False
 
