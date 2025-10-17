@@ -693,20 +693,20 @@ class MainWindow(QMainWindow):
                 print(f"任务 {take_item._task_id} 状态已更新为: {status_text} ({new_status})")
 
                 # 如果任务已保存到数据库，则更新数据库状态
-                if hasattr(take_item, '_task_id') and take_item._task_id:
-                    self._update_task_status_in_db(take_item._task_id, new_status)
+                if hasattr(take_item, '_episode_id') and take_item._episode_id:
+                    self._update_task_status_in_db(take_item._episode_id, new_status)
         except Exception as e:
             print(f"更新状态失败: {e}")
 
-    def _update_task_status_in_db(self, task_id, status):
+    def _update_task_status_in_db(self, episode_id, status):
         """更新数据库中的任务状态"""
         try:
             if self.db_controller:
-                success = self.db_controller.update_task_status(task_id, status)
+                success = self.db_controller.update_task_status(episode_id, status)
                 if success:
-                    print(f"数据库任务 {task_id} 状态已更新为: {status}")
+                    print(f"数据库任务 {episode_id} 状态已更新为: {status}")
                 else:
-                    print(f"更新数据库任务 {task_id} 状态失败")
+                    print(f"更新数据库任务 {episode_id} 状态失败")
         except Exception as e:
             print(f"更新数据库状态失败: {e}")
 

@@ -224,9 +224,9 @@ class DataCollectionAPIClient:
         result = self._make_request('POST', endpoint, data)
         return result.get('task_id') if result else None
     
-    def update_task_status(self, task_id: int, task_status: str) -> bool:
+    def update_task_status(self, episode_id: int, task_status: str) -> bool:
         """更新任务状态"""
-        endpoint = f"tasks/{task_id}/update_status/"
+        endpoint = f"tasks/{episode_id}/update_status/"
         data = {'task_status': task_status}
         result = self._make_request('PATCH', endpoint, data)
         return result is not None

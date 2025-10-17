@@ -153,9 +153,9 @@ class DBController:
         result = self.api_client.save_full_episode(collector_id, "", task_id, task_name, init_scene_text, action_config, task_status)
         return result if result else 0
     
-    def update_task_status(self, task_id: int, task_status: str) -> bool:
+    def update_task_status(self, episode_id: int, task_status: str) -> bool:
         """更新任务状态"""
-        return self.api_client.update_task_status(task_id, task_status)
+        return self.api_client.update_task_status(episode_id, task_status)
     
     def update_task_by_task_id(self, task_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """根据业务task_id更新任务信息"""
