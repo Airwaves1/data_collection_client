@@ -87,6 +87,10 @@ class DBController:
         """根据采集者ID获取任务列表"""
         return self.api_client.list_tasks_by_collector(collector_id, limit, offset)
 
+    def list_tasks_by_collector_with_time_range(self, collector_id: int, start_time: datetime, end_time: datetime, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """根据采集者ID和时间范围获取任务列表"""
+        return self.api_client.list_tasks_by_collector_with_time_range(collector_id, start_time, end_time, limit, offset)
+
     # -------- observations --------
     def create_observations(self, obs: Dict[str, Any]) -> int:
         """

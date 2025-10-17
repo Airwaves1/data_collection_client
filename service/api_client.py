@@ -151,6 +151,19 @@ class DataCollectionAPIClient:
         params = {'collector_id': collector_id, 'limit': limit, 'offset': offset}
         result = self._make_request('GET', endpoint, params=params)
         return result if result else []
+
+    def list_tasks_by_collector_with_time_range(self, collector_id: int, start_time: datetime, end_time: datetime, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
+        """根据采集者ID和时间范围获取任务列表"""
+        endpoint = "tasks/by_collector/"
+        params = {
+            'collector_id': collector_id, 
+            'start_time': start_time.isoformat(),
+            'end_time': end_time.isoformat(),
+            'limit': limit, 
+            'offset': offset
+        }
+        result = self._make_request('GET', endpoint, params=params)
+        return result if result else []
     
     # -------- observations API --------
     def create_observations(self, obs: Dict[str, Any]) -> Optional[int]:

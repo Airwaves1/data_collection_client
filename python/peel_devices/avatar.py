@@ -156,6 +156,7 @@ class CMAvatar(PeelDeviceBase):
 
     # 定义信号
     export_completed = Signal(bool, str, str, list)  # export_result, export_message, take_name, file_paths
+    recording_stopped = Signal()  # 设备主动停止录制信号
 
     def __init__(self,
                  name,
@@ -316,11 +317,20 @@ class CMAvatar(PeelDeviceBase):
             
             takeTable = self.GetTakeInfo()
             for row in range(takeTable.rowCount()):
-                item = takeTable.item(row, 0)  # 第一列，列号为0
-                comboBox = takeTable.cellWidget(row, 6)
-                if comboBox.currentText() != "NG":
-                    self.client.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, item.text()))
-                    self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, item.text()))
+                # 检查导出勾选框状态（第0列）
+                checkbox = takeTable.cellWidget(row, 0)
+                if checkbox and checkbox.isChecked():
+                    # 获取任务名称（第3列，因为添加了勾选框列）
+                    item = takeTable.item(row, 3)
+                    if item:
+                        take_name = item.text()
+                        print(f"[DEBUG] 导出勾选的任务: {take_name}")
+                        self.client.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
+                        self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
+                    else:
+                        print(f"[WARNING] 第{row}行任务名称为空，跳过导出")
+                else:
+                    print(f"[DEBUG] 第{row}行任务未勾选，跳过导出")
 
     def callback(self, address, command, *args):
 
@@ -363,21 +373,52 @@ class CMAvatar(PeelDeviceBase):
             if self.current_take:
                 self.takes[self.current_take] = { 'remote_project': proj_fullPath, 'remote_files' : remote_files, 'local_files': []}
 
+            # 发送设备主动停止录制信号
+            print("[DEBUG] Avatar设备主动停止录制，发送停止信号")
+            self.recording_stopped.emit()
+
             return
 
         if command == common.cmd_rep_exportFinish:
             # 设备导出完成回调
-            # 设备返回格式: 用逗号分隔的文件路径字符串
-            # 例如: "file1.fbx,file2.c3d,file3.txt"
-            if len(args) >= 1:
+            # 设备返回格式: 
+            # 参数1: 用逗号分隔的文件路径字符串（成功时）或空字符串（失败时）
+            # 参数2: 失败原因（失败时有值，成功时为空）
+            if len(args) >= 2:
                 file_paths_string = args[0]
+                failure_reason = args[1] if len(args) > 1 else ""
                 
-                # 解析文件路径字符串（用逗号分隔）
+                # 判断导出是否成功
+                if failure_reason and failure_reason.strip():
+                    # 有失败原因，表示导出失败
+                    export_result = False
+                    export_message = failure_reason.strip()
+                    file_paths = []
+                    take_name = ""
+                    print(f"[DEBUG] 导出失败: {export_message}")
+                else:
+                    # 没有失败原因，表示导出成功
+                    if file_paths_string and isinstance(file_paths_string, str):
+                        file_paths = [path.strip() for path in file_paths_string.split(',') if path.strip()]
+                        # 从第一个文件路径中提取take_name
+                        if file_paths:
+                            first_file = file_paths[0]
+                            take_name = os.path.basename(os.path.dirname(first_file))
+                        else:
+                            take_name = ""
+                    else:
+                        file_paths = []
+                        take_name = ""
+                    
+                    export_result = True
+                    export_message = "导出完成"
+                    print(f"[DEBUG] 导出成功: {take_name}")
+            elif len(args) >= 1:
+                # 兼容旧格式：只有一个参数
+                file_paths_string = args[0]
                 if file_paths_string and isinstance(file_paths_string, str):
                     file_paths = [path.strip() for path in file_paths_string.split(',') if path.strip()]
-                    # 从第一个文件路径中提取take_name（假设路径格式包含take_name）
                     if file_paths:
-                        # 假设文件路径格式类似: /path/to/take_name/file.ext
                         first_file = file_paths[0]
                         take_name = os.path.basename(os.path.dirname(first_file))
                     else:
@@ -576,7 +617,7 @@ class CMAvatar(PeelDeviceBase):
                     return 'unknown'
                 
             def item(self, row, col):
-                if col == 0 and row < len(self.takelist):  # 第一列是任务信息组合
+                if col == 3 and row < len(self.takelist):  # 第3列是任务名称（因为添加了勾选框列）
                     take_item = self.takelist[row]
 
                     # 直接使用TakeItem的take_name字段
@@ -602,7 +643,18 @@ class CMAvatar(PeelDeviceBase):
                 return None
                 
             def cellWidget(self, row, col):
-                if col == 6 and row < len(self.takelist):  # 第7列是状态下拉框
+                if col == 0 and row < len(self.takelist):  # 第0列是导出勾选框
+                    take_item = self.takelist[row]
+                    # 检查是否勾选导出（默认勾选）
+                    export_selected = getattr(take_item, '_export_selected', True)
+                    
+                    class MockCheckBox:
+                        def __init__(self, checked):
+                            self.checked = checked
+                        def isChecked(self):
+                            return self.checked
+                    return MockCheckBox(export_selected)
+                elif col == 7 and row < len(self.takelist):  # 第7列是状态下拉框
                     take_item = self.takelist[row]
                     task_status = getattr(take_item, '_task_status', 'pending')
                     

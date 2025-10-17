@@ -3,7 +3,7 @@ from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
 from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
     QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
-                   QLineEdit, QListWidget, QTextEdit, QComboBox, QProgressBar)
+                   QLineEdit, QListWidget, QTextEdit, QComboBox, QProgressBar, QCheckBox, QDateTimeEdit)
 
 from PySide6.QtGui import QColor
 from PySide6.QtGui import QRegularExpressionValidator
@@ -130,6 +130,7 @@ class MainWindow(QMainWindow):
         self._collect_progress_dialog = None
         self._collect_total = 0
         self._collect_done = 0
+        self._export_tasks = []  # 导出任务列表：[{"take_name": str, "status": str, "message": str}]
 
         self.init_device_list = []
         self.init_shot_list = []
@@ -243,7 +244,7 @@ class MainWindow(QMainWindow):
         return True
 
     def load_collector_tasks(self):
-        """加载当前采集者的所有任务数据"""
+        """加载当前采集者的任务数据（使用当前时间段筛选）"""
         if not self.current_collector:
             print("[WARN] 没有当前采集者信息，无法加载任务数据")
             return
@@ -256,11 +257,19 @@ class MainWindow(QMainWindow):
             
             print(f"[INFO] 开始加载采集者 {collector_id} 的任务数据...")
             
-            # 从数据库获取任务列表
-            tasks = self.db_controller.list_tasks_by_collector(collector_id, limit=1000, offset=0)
+            # 获取当前时间段筛选器的时间范围
+            start_time = self._start_datetime.dateTime().toPython()
+            end_time = self._end_datetime.dateTime().toPython()
+            
+            print(f"[DEBUG] 使用时间段筛选: {start_time} 到 {end_time}")
+            
+            # 使用时间段筛选获取任务列表
+            tasks = self.db_controller.list_tasks_by_collector_with_time_range(
+                collector_id, start_time, end_time, limit=1000, offset=0
+            )
             
             if not tasks:
-                print("[INFO] 没有找到任务数据")
+                print("[INFO] 指定时间段内没有找到任务数据")
                 return
             
             print(f"[INFO] 找到 {len(tasks)} 个任务，开始转换...")
@@ -350,6 +359,15 @@ class MainWindow(QMainWindow):
                 except:
                     action_config = []
             take_item._actions = action_config if isinstance(action_config, list) else []
+            
+            # 设置任务状态
+            take_item._task_status = task_data.get('task_status', 'pending')
+            
+            # 设置默认导出勾选状态
+            take_item._export_selected = True
+            
+            # 生成take_name
+            take_item._generate_take_name()
             
             return take_item
             
@@ -633,46 +651,78 @@ class MainWindow(QMainWindow):
             self._edt_notes.scrollToItem(self._edt_notes.item(row))
 
     def updateTakeRow(self, row, take_item):
+        # 导出勾选框
+        checkbox = QCheckBox()
+        checkbox.setChecked(True)  # 默认勾选
+        # 设置勾选框样式为透明背景，保持原始勾选效果
+        checkbox.setStyleSheet("""
+            QCheckBox {
+                background: transparent;
+            }
+        """)
+        # 连接勾选状态变更事件
+        checkbox.stateChanged.connect(lambda state, r=row: self.on_export_checkbox_changed(r, state))
+        self._table_takelist.setCellWidget(row, 0, checkbox)
+        
         # 任务ID
         twItem = QTableWidgetItem(take_item._task_id)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 0, twItem)
+        self._table_takelist.setItem(row, 1, twItem)
 
         # 录制ID (episode_id)
         episode_id = getattr(take_item, '_episode_id', '')
         twItem = QTableWidgetItem(episode_id)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 1, twItem)
+        self._table_takelist.setItem(row, 2, twItem)
 
         # 任务名称
         twItem = QTableWidgetItem(take_item._task_name)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 2, twItem)
+        self._table_takelist.setItem(row, 3, twItem)
         
         # 开始时间
         twItem = QTableWidgetItem(take_item._start_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 3, twItem)
+        self._table_takelist.setItem(row, 4, twItem)
 
         # 结束时间
         twItem = QTableWidgetItem(take_item._end_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 4, twItem)
+        self._table_takelist.setItem(row, 5, twItem)
 
         # 持续时间
         twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_item._due)} sec")
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-        self._table_takelist.setItem(row, 5, twItem)
+        self._table_takelist.setItem(row, 6, twItem)
         
         # 状态下拉框（仅两个选项，默认"接受"）
         status_combo = QComboBox()
         status_combo.addItems(["接受", "拒绝"])  # 仅保留两个选项
         status_combo.setCurrentText("接受")
         
+        # 设置下拉框样式为透明背景，保持原始样式
+        status_combo.setStyleSheet("""
+            QComboBox {
+                background: transparent;
+                font-size: 11px;
+            }
+        """)
+        
         # 连接状态变更事件
         status_combo.currentTextChanged.connect(lambda text, r=row: self.on_status_changed(r, text))
         
-        self._table_takelist.setCellWidget(row, 6, status_combo)
+        self._table_takelist.setCellWidget(row, 7, status_combo)
+
+    def on_export_checkbox_changed(self, row, state):
+        """处理导出勾选框状态变更事件"""
+        try:
+            if 0 <= row < len(self._takelist):
+                take_item = self._takelist[row]
+                is_checked = state == Qt.Checked
+                # 可以在TakeItem中添加一个属性来记录勾选状态
+                take_item._export_selected = is_checked
+        except Exception as e:
+            print(f"[ERROR] 处理导出勾选框状态变更失败: {e}")
 
     def on_status_changed(self, row, status_text):
         """处理状态变更事件"""
@@ -817,9 +867,24 @@ class MainWindow(QMainWindow):
         
         # 计算本次需要导出的总数（以当前录制条目数为准）
         try:
-            self._collect_total = max(1, len(self._takelist))
-        except Exception:
+            # 获取所有勾选的任务
+            self._export_tasks = []
+            for take_item in self._takelist:
+                if hasattr(take_item, '_export_selected') and take_item._export_selected:
+                    self._export_tasks.append({
+                        'take_name': take_item._take_name,
+                        'status': 'waiting',
+                        'message': '等待导出'
+                    })
+            
+            self._collect_total = len(self._export_tasks)
+            if self._collect_total == 0:
+                QMessageBox.warning(self, "导出提示", "没有选择要导出的任务")
+                return
+        except Exception as e:
+            print(f"[ERROR] 初始化导出任务失败: {e}")
             self._collect_total = 1
+            self._export_tasks = [{'take_name': '未知任务', 'status': 'waiting', 'message': '等待导出'}]
         self._collect_done = 0
         self._show_collect_progress_dialog()
 
@@ -947,9 +1012,11 @@ class MainWindow(QMainWindow):
                 # 更新现有的TaskInfo记录，而不是创建新的
                 update_data = {
                     'task_name': final_task_name,  # 保存中文名称（如果有的话）
+                    'task_name_cn': task_name_cn,  # 保存中文名称
                     'init_scene_text': scene_text,
                     'action_config': action_config,
-                    'task_status': 'pending'  # 默认为待审核状态
+                    'task_status': 'pending',  # 默认为待审核状态
+                    'recording_end_time': take_item._end_time  # 保存录制结束时间
                 }
                 
                 result = self.db_controller.update_task_by_task_id(str(task_id), update_data)
@@ -1287,8 +1354,9 @@ class MainWindow(QMainWindow):
     def create_takelist(self, splitter):
         # 创建 QTableWidget
         takelistWidget = QTableWidget(splitter)
-        # 设置列名 - 优化后的列名
-        header_labels = ["任务ID", 
+        # 设置列名 - 优化后的列名，添加勾选框列
+        header_labels = ["导出", 
+                         "任务ID", 
                          "录制ID", 
                          "任务名称", 
                          "开始时间", 
@@ -1297,6 +1365,10 @@ class MainWindow(QMainWindow):
                          "状态"]
         takelistWidget.setColumnCount(len(header_labels))
         takelistWidget.setHorizontalHeaderLabels(header_labels)
+        
+        # 为导出列设置固定宽度，为按钮预留空间
+        takelistWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
+        takelistWidget.setColumnWidth(0, 100)  # 设置导出列宽度
         # 设置表头字体颜色为黑色
         takelistWidget.horizontalHeader().setStyleSheet(app_css.SheetStyle_TableWidget_Header)
         # 设置表头字体颜色为黑色
@@ -1310,15 +1382,167 @@ class MainWindow(QMainWindow):
         takelistWidget.customContextMenuRequested.connect(self.showContextMenu)
 
         # 设置列宽
-        takelistWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 任务ID
-        takelistWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 录制ID
-        takelistWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)           # 任务名称
-        takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)  # 开始时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 结束时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 持续时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 状态
+        takelistWidget.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 导出勾选框
+        takelistWidget.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)  # 任务ID
+        takelistWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)  # 录制ID
+        takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)           # 任务名称
+        takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 开始时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 结束时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 持续时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)  # 状态
+
+        # 设置行高
+        takelistWidget.verticalHeader().setDefaultSectionSize(32)  # 设置默认行高为32px
 
         return takelistWidget
+
+
+    def create_time_filter_widget(self, splitter):
+        """创建时间段筛选组件"""
+        filter_widget = QWidget()
+        filter_layout = QHBoxLayout(filter_widget)
+        
+        # 开始时间标签
+        start_label = QLabel("开始时间:")
+        filter_layout.addWidget(start_label)
+        
+        # 开始日期时间选择器
+        self._start_datetime = QDateTimeEdit()
+        self._start_datetime.setDisplayFormat("yyyy-MM-dd hh:mm")
+        self._start_datetime.setCalendarPopup(True)
+        # 设置为当天开始时间
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        self._start_datetime.setDateTime(today)
+        filter_layout.addWidget(self._start_datetime)
+        
+        # 结束时间标签
+        end_label = QLabel("结束时间:")
+        filter_layout.addWidget(end_label)
+        
+        # 结束日期时间选择器
+        self._end_datetime = QDateTimeEdit()
+        self._end_datetime.setDisplayFormat("yyyy-MM-dd hh:mm")
+        self._end_datetime.setCalendarPopup(True)
+        # 设置为当天结束时间
+        today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=0)
+        self._end_datetime.setDateTime(today_end)
+        filter_layout.addWidget(self._end_datetime)
+        
+        # 筛选按钮
+        filter_btn = QPushButton("筛选")
+        filter_btn.clicked.connect(self.apply_time_filter)
+        filter_layout.addWidget(filter_btn)
+        
+        # 重置按钮
+        reset_btn = QPushButton("重置")
+        reset_btn.clicked.connect(self.reset_time_filter)
+        filter_layout.addWidget(reset_btn)
+        
+        # 分隔线
+        separator = QLabel("|")
+        separator.setStyleSheet("color: #ccc; font-weight: bold;")
+        filter_layout.addWidget(separator)
+        
+        # 全选导出按钮
+        select_all_btn = QPushButton("全选导出")
+        select_all_btn.clicked.connect(self.select_all_export)
+        filter_layout.addWidget(select_all_btn)
+        
+        # 取消全选导出按钮
+        deselect_all_btn = QPushButton("取消全选")
+        deselect_all_btn.clicked.connect(self.deselect_all_export)
+        filter_layout.addWidget(deselect_all_btn)
+        
+        # 添加弹性空间
+        filter_layout.addStretch()
+        
+        return filter_widget
+
+    def select_all_export(self):
+        """全选所有导出任务"""
+        try:
+            for row in range(self._table_takelist.rowCount()):
+                checkbox = self._table_takelist.cellWidget(row, 0)
+                if checkbox and hasattr(checkbox, 'setChecked'):
+                    checkbox.setChecked(True)
+            print("[DEBUG] 已全选所有导出任务")
+        except Exception as e:
+            print(f"[ERROR] 全选导出任务失败: {e}")
+
+    def deselect_all_export(self):
+        """取消全选所有导出任务"""
+        try:
+            for row in range(self._table_takelist.rowCount()):
+                checkbox = self._table_takelist.cellWidget(row, 0)
+                if checkbox and hasattr(checkbox, 'setChecked'):
+                    checkbox.setChecked(False)
+            print("[DEBUG] 已取消全选所有导出任务")
+        except Exception as e:
+            print(f"[ERROR] 取消全选导出任务失败: {e}")
+
+    def apply_time_filter(self):
+        """应用时间段筛选"""
+        try:
+            if not self.current_collector:
+                QMessageBox.warning(self, "筛选提示", "请先登录采集者")
+                return
+            
+            # 获取时间范围
+            start_time = self._start_datetime.dateTime().toPython()
+            end_time = self._end_datetime.dateTime().toPython()
+            
+            print(f"[DEBUG] 应用时间段筛选: {start_time} 到 {end_time}")
+            
+            # 调用数据库控制器获取筛选后的任务
+            collector_id = self.current_collector.get('collector_id')
+            if collector_id:
+                # 这里需要修改API调用，传递时间参数
+                tasks_data = self.db_controller.list_tasks_by_collector_with_time_range(
+                    collector_id, start_time, end_time
+                )
+                
+                if tasks_data:
+                    # 清空当前列表
+                    self._takelist.clear()
+                    
+                    # 转换并添加任务
+                    for task_data in tasks_data:
+                        take_item = self._convert_db_task_to_take_item(task_data)
+                        if take_item:
+                            self._takelist.append(take_item)
+                    
+                    # 更新UI
+                    self._update_task_list_ui()
+                    print(f"[INFO] 筛选完成，显示 {len(self._takelist)} 个任务")
+                else:
+                    print("[INFO] 筛选结果为空")
+                    self._takelist.clear()
+                    self._update_task_list_ui()
+            else:
+                print("[ERROR] 无法获取采集者ID")
+                
+        except Exception as e:
+            print(f"[ERROR] 应用时间段筛选失败: {e}")
+            QMessageBox.warning(self, "筛选失败", f"筛选失败: {e}")
+
+    def reset_time_filter(self):
+        """重置时间段筛选"""
+        try:
+            # 重置为当天开始到结束
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=0)
+            
+            self._start_datetime.setDateTime(today)
+            self._end_datetime.setDateTime(today_end)
+            
+            # 重新加载任务列表
+            if self.current_collector:
+                self.load_collector_tasks()
+            
+            print("[DEBUG] 时间段筛选已重置")
+            
+        except Exception as e:
+            print(f"[ERROR] 重置时间段筛选失败: {e}")
     
     # 双击QTableWidget显示编辑对话框
     def handleItemDoubleClicked(self, item):
@@ -1645,16 +1869,20 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(self)
         splitter.setOrientation(Qt.Vertical)
 
+        # 创建时间段筛选组件
+        self._time_filter_widget = self.create_time_filter_widget(splitter)
+        
         self._table_takelist = self.create_takelist(splitter)
         self._widget_recordPanel = self.create_recordpanel(splitter)
 
         # 创建布局
         #layout = QVBoxLayout()
+        splitter.addWidget(self._time_filter_widget)
         splitter.addWidget(self._table_takelist)
         splitter.addWidget(self._widget_recordPanel)
 
         # 设置 QSplitter 的尺寸
-        splitter.setSizes([300, 500])
+        splitter.setSizes([50, 300, 500])  # 筛选组件50px，任务列表300px，录制面板500px
 
         # 设置中心部件
         self.setCentralWidget(splitter)
@@ -1935,6 +2163,15 @@ class MainWindow(QMainWindow):
                         # 连接新的信号
                         avatar_device.export_completed.connect(self._on_avatar_export_completed)
                         # 信号连接成功
+                        
+                        # 连接设备主动停止录制信号
+                        if hasattr(avatar_device, 'recording_stopped'):
+                            try:
+                                avatar_device.recording_stopped.disconnect()
+                            except TypeError:
+                                pass
+                            avatar_device.recording_stopped.connect(self._on_avatar_recording_stopped)
+                            print(f"[DEBUG] 已连接Avatar设备停止录制信号")
                         print(f"[DEBUG] 设备对象: {avatar_device}")
                         # 信号对象
                     else:
@@ -1946,16 +2183,21 @@ class MainWindow(QMainWindow):
             import traceback
             traceback.print_exc()
 
+    def _on_avatar_recording_stopped(self):
+        """处理Avatar设备主动停止录制的信号"""
+        print("[DEBUG] 收到Avatar设备主动停止录制信号")
+        self._handle_device_stop_recording()
+
     def _on_avatar_export_completed(self, export_result, export_message, take_name, file_paths=None):
         """处理CMAvatar设备导出完成回调"""
         print(f"[DEBUG] 收到导出完成回调: result={export_result}, message={export_message}, take_name={take_name}, file_paths={file_paths}")
         # 无论成功失败，结束等待状态
         self._waiting_for_export = False
         
+        # 更新任务状态
+        self._update_task_status(take_name, export_result, export_message)
+        
         if export_result and take_name and file_paths:
-            # 更新非模态进度条
-            self._collect_done = max(0, self._collect_done + 1)
-            self._update_collect_progress_dialog()
             # 停止超时定时器
             if hasattr(self, '_export_timeout_timer') and self._export_timeout_timer is not None:
                 try:
@@ -1971,47 +2213,107 @@ class MainWindow(QMainWindow):
             # 导出失败
             self.statusBar().showMessage(f"导出失败: {export_message}", 3000)
             print(f"[ERROR] 导出失败: {export_message}")
-            QMessageBox.warning(self, "导出失败", f"设备导出失败: {export_message}")
+
+    def _update_task_status(self, take_name, success, message):
+        """更新导出任务状态"""
+        try:
+            # 查找对应的任务
+            for task in self._export_tasks:
+                if task['take_name'] == take_name:
+                    if success:
+                        task['status'] = 'success'
+                        task['message'] = '导出成功'
+                    else:
+                        task['status'] = 'failed'
+                        task['message'] = f'导出失败: {message}'
+                    break
+            
+            # 更新表格显示
+            self._update_export_table()
+            
+            # 检查是否所有任务都完成了
+            all_completed = all(task['status'] in ['success', 'failed'] for task in self._export_tasks)
+            if all_completed:
+                self.statusBar().showMessage("所有任务导出完成", 3000)
+                
+        except Exception as e:
+            print(f"[ERROR] 更新任务状态失败: {e}")
 
     def _show_collect_progress_dialog(self):
-        """显示非模态采集导出进度对话框，可随时关闭不阻塞操作"""
+        """显示非模态采集导出进度对话框，以列表形式显示任务状态"""
         try:
             if self._collect_progress_dialog is None:
                 dlg = QDialog(self)
-                dlg.setWindowTitle("采集导出进度")
+                dlg.setWindowTitle("导出进度")
                 dlg.setModal(False)
+                dlg.resize(500, 400)
+                
                 # 构建UI
-                v = QVBoxLayout(dlg)
-                lbl = QLabel("正在导出...")
-                bar = QProgressBar()
-                bar.setRange(0, 100)
-                bar.setValue(0)
-                v.addWidget(lbl)
-                v.addWidget(bar)
+                layout = QVBoxLayout(dlg)
+                
+                # 标题
+                title_label = QLabel("正在导出任务...")
+                title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+                layout.addWidget(title_label)
+                
+                # 任务列表
+                self._export_table = QTableWidget()
+                self._export_table.setColumnCount(2)
+                self._export_table.setHorizontalHeaderLabels(["任务名称", "状态"])
+                self._export_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+                self._export_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+                self._export_table.setAlternatingRowColors(True)
+                self._export_table.setSelectionBehavior(QTableWidget.SelectRows)
+                layout.addWidget(self._export_table)
+                
+                # 关闭按钮
+                close_btn = QPushButton("关闭")
+                close_btn.clicked.connect(dlg.close)
+                layout.addWidget(close_btn)
+                
                 # 保存引用
-                dlg._lbl = lbl
-                dlg._bar = bar
+                dlg._export_table = self._export_table
                 self._collect_progress_dialog = dlg
-            # 初始化显示
-            self._update_collect_progress_dialog()
+            
+            # 初始化任务列表
+            self._update_export_table()
             self._collect_progress_dialog.show()
         except Exception as e:
             print(f"[WARN] 显示进度对话框失败: {e}")
 
-    def _update_collect_progress_dialog(self):
-        """根据当前计数更新对话框显示"""
+    def _update_export_table(self):
+        """更新导出任务表格"""
         try:
-            if not self._collect_progress_dialog:
+            if not self._collect_progress_dialog or not hasattr(self, '_export_table'):
                 return
-            total = max(1, int(self._collect_total or 1))
-            done = max(0, int(self._collect_done or 0))
-            pct = int(min(100, (done / total) * 100))
-            self._collect_progress_dialog._bar.setValue(pct)
-            self._collect_progress_dialog._lbl.setText(f"已完成 {done}/{total}")
-            if done >= total:
-                self._collect_progress_dialog._lbl.setText(f"已完成 {done}/{total}（完成）")
+            
+            self._export_table.setRowCount(len(self._export_tasks))
+            
+            for row, task in enumerate(self._export_tasks):
+                # 任务名称
+                name_item = QTableWidgetItem(task['take_name'])
+                name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+                self._export_table.setItem(row, 0, name_item)
+                
+                # 状态
+                status_item = QTableWidgetItem(task['message'])
+                status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+                
+                # 根据状态设置颜色
+                if task['status'] == 'success':
+                    status_item.setBackground(QColor(200, 255, 200))  # 浅绿色
+                elif task['status'] == 'failed':
+                    status_item.setBackground(QColor(255, 200, 200))  # 浅红色
+                else:  # waiting
+                    status_item.setBackground(QColor(255, 255, 200))  # 浅黄色
+                
+                self._export_table.setItem(row, 1, status_item)
+            
+            # 自动调整行高
+            self._export_table.resizeRowsToContents()
+            
         except Exception as e:
-            print(f"[WARN] 更新进度对话框失败: {e}")
+            print(f"[WARN] 更新导出表格失败: {e}")
 
     def _send_to_fileservice(self, take_name, file_paths):
         """发送文件路径给fileservice"""
@@ -2139,63 +2441,80 @@ class MainWindow(QMainWindow):
         self._will_save = True
 
     def stop_recording(self):
-        """停止录制流程"""
-        print("[DEBUG] 停止录制流程")
-        # 计算停止ID（若有正在记录的take则优先使用其record_id，否则兜底0或当前行数）
-        stop_id = 0
-        if self._takelist:
-            last_take = self._takelist[-1]
-            stop_id = getattr(last_take, "_record_id", None) or len(self._takelist)
+        """停止录制流程（用户主动停止）"""
+        print("[DEBUG] 用户主动停止录制流程")
+        self._stop_recording_internal(user_initiated=True)
 
-        self.mod_peel.command('stop', str(stop_id))
-
-        # 更新UI状态
-        self._btn_record.setText("录制")
-        self._record_secord = 0
-        self._recording = False
-        self._time_record.stop()
-
-        # 若存在有效take，则更新结束时间与时长并刷新表格
-        if self._takelist:
-            take_last = self._takelist[-1]
-            try:
-                take_last._end_time = datetime.now()
-                take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
-
-                row_count = len(self._takelist)
-                lastRow = row_count - 1
-
-                str_end_time = take_last._end_time.strftime('%H:%M:%S')
-                twItem = QTableWidgetItem(str_end_time)
-                twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-                self._table_takelist.setItem(lastRow, 4, twItem)
-
-                twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_last._due)} sec")
-                twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
-                self._table_takelist.setItem(lastRow, 5, twItem)
-            except Exception as e:
-                print(f"[WARN] 更新录制行显示失败: {e}")
-
-        # 重新启用设备管理按钮与录制按钮
-        self._device_add.setEnabled(True)
-        self._device_del.setEnabled(True)
-        self._btn_record.setEnabled(True)
-
-        self.statusBar().showMessage("就绪...", 2000)
-        self.update_tips("录制完成", 3000)
-        self.save(True)
-
-        # 保存任务到数据库（若有take）
+    def _stop_recording_internal(self, user_initiated=True):
+        """内部停止录制流程
+        
+        Args:
+            user_initiated: True表示用户主动停止，False表示设备主动停止
+        """
         try:
+            # 如果是用户主动停止，需要发送停止命令给设备
+            if user_initiated:
+                # 计算停止ID（若有正在记录的take则优先使用其record_id，否则兜底0或当前行数）
+                stop_id = 0
+                if self._takelist:
+                    last_take = self._takelist[-1]
+                    stop_id = getattr(last_take, "_record_id", None) or len(self._takelist)
+
+                print(f"[DEBUG] 发送停止命令给设备，stop_id={stop_id}")
+                self.mod_peel.command('stop', str(stop_id))
+            else:
+                print("[DEBUG] 设备主动停止，不发送停止命令")
+
+            # 更新UI状态
+            self._btn_record.setText("录制")
+            self._record_secord = 0
+            self._recording = False
+            self._time_record.stop()
+
+            # 若存在有效take，则更新结束时间与时长并刷新表格
             if self._takelist:
-                last_take = self._takelist[-1]
-                task_id = getattr(last_take, '_task_id', None)
-                if task_id is not None:
-                    self._save_task_to_database(task_id, [last_take])
-                    # 保存成功后，重新加载任务列表以显示最新数据
-                    self.load_collector_tasks()
+                take_last = self._takelist[-1]
+                try:
+                    take_last._end_time = datetime.now()
+                    take_last._due = (take_last._end_time - take_last._start_time).total_seconds()
+
+                    row_count = len(self._takelist)
+                    lastRow = row_count - 1
+
+                    str_end_time = take_last._end_time.strftime('%H:%M:%S')
+                    twItem = QTableWidgetItem(str_end_time)
+                    twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+                    self._table_takelist.setItem(lastRow, 4, twItem)
+
+                    twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_last._due)} sec")
+                    twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+                    self._table_takelist.setItem(lastRow, 5, twItem)
+                except Exception as e:
+                    print(f"[WARN] 更新录制行显示失败: {e}")
+
+            # 重新启用设备管理按钮与录制按钮
+            self._device_add.setEnabled(True)
+            self._device_del.setEnabled(True)
+            self._btn_record.setEnabled(True)
+
+            self.statusBar().showMessage("就绪...", 2000)
+            self.update_tips("录制完成", 3000)
+            self.save(True)
+
+            # 保存任务到数据库（若有take）
+            try:
+                if self._takelist:
+                    last_take = self._takelist[-1]
+                    task_id = getattr(last_take, '_task_id', None)
+                    if task_id is not None:
+                        self._save_task_to_database(task_id, [last_take])
+                        # 保存成功后，重新加载任务列表以显示最新数据
+                        self.load_collector_tasks()
+            except Exception as e:
+                print(f"[WARN] 停止后保存数据库失败: {e}")
+                
         except Exception as e:
-            print(f"[WARN] 停止后保存数据库失败: {e}")
+            print(f"[ERROR] 停止录制流程失败: {e}")
 
     
 
@@ -2420,6 +2739,9 @@ class MainWindow(QMainWindow):
             record_id=record_id
         )
         
+        # 设置默认导出勾选状态
+        takeItem._export_selected = True
+        
         self._takelist.append(takeItem)
 
         row_count = len(self._takelist)
@@ -2564,6 +2886,21 @@ class MainWindow(QMainWindow):
         status_color = self.getStatusColor(updatedDevice.status)
         twItem.setBackground(status_color)
         self._deviceTable.setItem(row, 1, twItem)
+
+    def _handle_device_stop_recording(self):
+        """处理设备主动停止录制的情况"""
+        try:
+            # 检查是否正在录制
+            if not self._recording:
+                print("[DEBUG] 当前没有在录制，忽略设备停止信号")
+                return
+            
+            print("[DEBUG] 设备主动停止录制，执行停止录制流程")
+            # 调用统一的停止录制流程，但不发送停止命令给设备
+            self._stop_recording_internal(user_initiated=False)
+                
+        except Exception as e:
+            print(f"[ERROR] 处理设备停止录制失败: {e}")
 
     def getStatusColor(self, status):
         if status == 'OFFLINE':
