@@ -32,7 +32,7 @@ class TakeItemDialog(QtWidgets.QDialog):
         self._edt_taskId.setValidator(validator_half)
         gridLayout.addWidget(self._edt_taskId, 0, 1)
 
-        lblTaskName = QLabel(self.tr("Task Name:"))
+        lblTaskName = QLabel(self.tr("Task Name (CN):"))
         gridLayout.addWidget(lblTaskName, 1, 0)
         self._edt_taskName = QtWidgetFactory.create_QLineEdit(self._takeItem._task_name)
         self._edt_taskName.setMaxLength(app_const.Max_Shot_Name)
@@ -107,9 +107,9 @@ class TakeItemDialog(QtWidgets.QDialog):
             self._takeItem._task_id = self._edt_taskId.text()
             self._modify = True
 
-        # Task Name
-        if self._takeItem._task_name != self._edt_taskName.text():
-            self._takeItem._task_name = self._edt_taskName.text()
+        # Task Name (CN) 仅用于显示和存档，不影响设备交互
+        if getattr(self._takeItem, '_take_name_cn', None) != self._edt_taskName.text():
+            self._takeItem._take_name_cn = self._edt_taskName.text()
             self._modify = True
 
         # 描述
@@ -122,8 +122,9 @@ class TakeItemDialog(QtWidgets.QDialog):
             self._takeItem._take_notes = self._edt_notes.toPlainText()
             self._modify = True
 
-        # 更新take_name
+        # 更新take_name：仅当影响英文组成部分（task_id）变化时才重算
         if self._modify:
+            # 若任务ID变更，使用既有英文 task_name 重新生成英文 take_name
             self._takeItem._generate_take_name()
 
         self.accept()

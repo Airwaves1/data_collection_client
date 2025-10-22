@@ -149,17 +149,22 @@ class DBController:
 
     # -------- 便捷组合 API --------
     def save_full_episode(self, collector_id: int, episode_id: str, task_id: str, task_name: str,
-                          init_scene_text: str, action_config: List[dict], task_status: str = 'pending') -> int:
+                          init_scene_text: str, action_config: List[dict], task_status: str = 'pending', 
+                          task_name_cn: str = '') -> int:
         """
         一次性写入 task_info（不含子表），返回 task_info.id
         episode_id参数保留用于兼容性，但实际由后端自动生成
         """
-        result = self.api_client.save_full_episode(collector_id, "", task_id, task_name, init_scene_text, action_config, task_status)
+        result = self.api_client.save_full_episode(collector_id, "", task_id, task_name, init_scene_text, action_config, task_status, task_name_cn)
         return result if result else 0
     
     def update_task_status(self, episode_id: int, task_status: str) -> bool:
         """更新任务状态"""
         return self.api_client.update_task_status(episode_id, task_status)
+
+    def set_task_exported(self, episode_id: str, exported: bool = True) -> bool:
+        """设置任务导出状态 exported"""
+        return self.api_client.set_task_exported(episode_id, exported)
     
     def update_task_by_task_id(self, task_id: str, task_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """根据业务task_id更新任务信息"""

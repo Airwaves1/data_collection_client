@@ -5,6 +5,8 @@
 /data/
 /data/CHINGMU_World Task Statistics-V1.0-2025.9.22.xlsx 
 
+/config/
+
 # Python 字节码文件 - 通用忽略规则
 *.py[cod]
 *$py.class

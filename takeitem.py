@@ -16,7 +16,7 @@ class ActionInfo:
 
 
 class TakeItem:
-    def __init__(self, task_id="", task_name="", episode_id="", take_desc="", take_note="", record_id=None):
+    def __init__(self, task_id="", task_name="", episode_id="", take_desc="", take_note="", record_id=None, take_name_cn: str = ""):
         # 任务ID（业务任务ID）
         self._task_id = task_id
         # 任务名称（从数据库获取）
@@ -25,6 +25,8 @@ class TakeItem:
         self._episode_id = episode_id
         # Take名称（组合格式：task_name_task_id_episode_id）
         self._take_name = ""
+        # Take中文名称（源自 task_name_cn，仅用于显示/存档，不参与设备交互）
+        self._take_name_cn = take_name_cn or ""
         # 录制描述
         self._take_desc = take_desc
         # 录制批注
@@ -73,6 +75,7 @@ class TakeItem:
             "task_name": self._task_name,
             "episode_id": self._episode_id,
             "take_name": self._take_name,
+            "take_name_cn": self._take_name_cn,
             "take_desc": self._take_desc,
             "take_notes": self._take_notes,
             "record_id": self._record_id,

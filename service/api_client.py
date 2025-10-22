@@ -223,13 +223,15 @@ class DataCollectionAPIClient:
     
     # -------- 便捷组合 API --------
     def save_full_episode(self, collector_id: int, episode_id: str, task_id: str, task_name: str,
-                          init_scene_text: str, action_config: List[dict], task_status: str = 'pending') -> Optional[int]:
+                          init_scene_text: str, action_config: List[dict], task_status: str = 'pending', 
+                          task_name_cn: str = '') -> Optional[int]:
         """一次性写入 task_info（不含子表），返回 task_info.id"""
         endpoint = "tasks/save_full_episode/"
         data = {
             'collector_id': collector_id,
             'task_id': task_id,
             'task_name': task_name,
+            'task_name_cn': task_name_cn,  # 新增中文名称字段
             'init_scene_text': init_scene_text,
             'action_config': action_config,
             'task_status': task_status,
@@ -241,6 +243,13 @@ class DataCollectionAPIClient:
         """更新任务状态"""
         endpoint = f"tasks/{episode_id}/update_status/"
         data = {'task_status': task_status}
+        result = self._make_request('PATCH', endpoint, data)
+        return result is not None
+
+    def set_task_exported(self, episode_id: str, exported: bool = True) -> bool:
+        """设置任务导出状态 exported"""
+        endpoint = f"tasks/{episode_id}/set_exported/"
+        data = {'exported': exported}
         result = self._make_request('PATCH', endpoint, data)
         return result is not None
     
@@ -268,10 +277,13 @@ class DataCollectionAPIClient:
         return self._make_request('GET', endpoint)
     
     # -------- 导出 API --------
-    def start_export(self) -> Optional[Dict[str, Any]]:
+    def start_export(self, selected_tasks=None) -> Optional[Dict[str, Any]]:
         """启动后端导出"""
         endpoint = "export/export_all/"
-        return self._make_request('POST', endpoint)
+        data = {}
+        if selected_tasks:
+            data['selected_tasks'] = selected_tasks
+        return self._make_request('POST', endpoint, data)
     
     def get_export_status(self, export_id: str) -> Optional[Dict[str, Any]]:
         """查询导出状态"""

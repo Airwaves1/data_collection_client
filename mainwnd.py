@@ -1,6 +1,6 @@
 import sys, os, importlib, json, requests
 from PySide6.QtCore import Qt, QTimer, QTime, QTranslator, Signal
-from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont)
+from PySide6.QtGui import (QAction, QIcon, QKeySequence, QTextCursor, QTextCharFormat, QColor, QFont, QBrush)
 from PySide6.QtWidgets import (QApplication, QDockWidget, QSplitter, QGridLayout, QLabel, QDialog, QMenu,
     QFileDialog, QMainWindow, QMessageBox, QWidget, QTableWidget, QVBoxLayout, QHBoxLayout, QTableWidgetItem, QSpacerItem, QSizePolicy, QHeaderView, QPushButton,
                    QLineEdit, QListWidget, QTextEdit, QComboBox, QProgressBar, QCheckBox, QDateTimeEdit)
@@ -25,7 +25,6 @@ from login_dialog import LoginDialog
 import mylogger
 from factory_widget import QtWidgetFactory
 import app_const
-from dict_shotname import DictShotName
 from task_list_widget import TaskListWidget
 from task_property_widget import TaskPropertyPanel
 from service.db_controller import DBController
@@ -133,7 +132,6 @@ class MainWindow(QMainWindow):
         self._export_tasks = []  # 导出任务列表：[{"take_name": str, "status": str, "message": str}]
 
         self.init_device_list = []
-        self.init_shot_list = []
 
         # 录制面板初始数据
         self.init_take_no = app_const.Defualt_Edit_Take_No
@@ -141,8 +139,6 @@ class MainWindow(QMainWindow):
         self.init_take_name = ""
         self.init_take_notes = ''
         self.init_take_desc = ''
-
-        self._shot_list = []
 
         # 保存Flag
         self._will_save = False
@@ -159,10 +155,6 @@ class MainWindow(QMainWindow):
         self._takelist = []
         #设备列表
         self._all_device = []
-        #takename索引，放置重复录制相同名称的视频
-        self._dict_takename = {}
-        # shotname 分组
-        self._dict_shotname = DictShotName()
         
         # 自增ID管理
         self._next_episode_id = 1
@@ -179,9 +171,6 @@ class MainWindow(QMainWindow):
 
         self._centerWidget = QWidget()
         self.setCentralWidget(self._centerWidget)
-
-        # 为兼容旧逻辑，提供一个隐藏的占位 shot 表（不显示到UI，仅用于内部读写）
-        self._shotTable = QTableWidget(0, 4)
 
         self.create_actions()
         self.create_menus()
@@ -329,6 +318,8 @@ class MainWindow(QMainWindow):
             
             # 设置时间信息
             created_at = task_data.get('created_at')
+            recording_end_time = task_data.get('recording_end_time')
+            
             if created_at:
                 if isinstance(created_at, str):
                     # 如果是字符串，尝试解析
@@ -338,10 +329,22 @@ class MainWindow(QMainWindow):
                     except:
                         created_at = datetime.now()
                 take_item._start_time = created_at
-                take_item._end_time = created_at  # 暂时使用相同时间
             else:
                 take_item._start_time = datetime.now()
-                take_item._end_time = datetime.now()
+            
+            # 设置结束时间
+            if recording_end_time:
+                if isinstance(recording_end_time, str):
+                    from datetime import datetime
+                    try:
+                        recording_end_time = datetime.fromisoformat(recording_end_time.replace('Z', '+00:00'))
+                    except:
+                        recording_end_time = take_item._start_time
+                take_item._end_time = recording_end_time
+                print(f"[DEBUG] 设置结束时间: {take_item._end_time}")
+            else:
+                take_item._end_time = take_item._start_time
+                print(f"[DEBUG] 没有录制结束时间，使用开始时间: {take_item._end_time}")
             
             # 计算持续时间（暂时设为0）
             take_item._due = 0.0
@@ -362,6 +365,11 @@ class MainWindow(QMainWindow):
             
             # 设置任务状态
             take_item._task_status = task_data.get('task_status', 'pending')
+            # 设置是否已导出（用于主界面着色）
+            try:
+                take_item._exported = bool(task_data.get('exported', False))
+            except Exception:
+                take_item._exported = False
             
             # 设置默认导出勾选状态
             take_item._export_selected = True
@@ -386,9 +394,31 @@ class MainWindow(QMainWindow):
                 self.updateTakeRow(row, take_item)
             
             print(f"[INFO] 任务列表UI已更新，显示 {row_count} 个任务")
+            # 应用导出着色（确保从数据库加载时也能正确着色）
+            self._apply_exported_coloring_to_main_list()
             
         except Exception as e:
             print(f"[ERROR] 更新任务列表UI失败: {e}")
+
+    def _apply_exported_coloring_to_main_list(self):
+        """根据 _takelist 中的 _exported 状态，为主界面列表逐行着色"""
+        try:
+            if not hasattr(self, '_table_takelist') or not self._table_takelist:
+                return
+            total_rows = min(self._table_takelist.rowCount(), len(self._takelist))
+            for row in range(total_rows):
+                take_item = self._takelist[row]
+                exported_status = getattr(take_item, '_exported', False)
+                # 更新是否导出列（第7列）
+                exported_item = self._table_takelist.item(row, 7)
+                if exported_item:
+                    exported_item.setText("True" if exported_status else "False")
+                    if exported_status:
+                        exported_item.setForeground(QColor(100, 149, 237))  # 淡蓝色
+                    else:
+                        exported_item.setForeground(QColor(255, 255, 255))  # 白色
+        except Exception as e:
+            print(f"[ERROR] 应用导出着色失败: {e}")
 
     # 当主窗口关闭，子窗口也关闭
     def closeEvent(self, event):
@@ -435,12 +465,9 @@ class MainWindow(QMainWindow):
             self._save_fullpath = None
             self._recording = False
             self._record_secord = 0
-            self._dict_takename = {}
-            self._dict_shotname.clear()
             self._takelist = []
             self._all_device = []
             self.init_device_list = []  # 重置初始设备列表
-            self.init_shot_list = []   # 重置初始shot列表
             
             # 清空任务列表数据
             if hasattr(self, '_taskListWidget') and self._taskListWidget:
@@ -455,7 +482,6 @@ class MainWindow(QMainWindow):
     # 保存当前工程
     def save_project_ask(self):
 
-        self.update_shot_list_model()
         modify = self.is_project_modify()
 
         if not self._will_save and not modify:
@@ -493,44 +519,8 @@ class MainWindow(QMainWindow):
                     return True
                 if device.address != init_device.get('address', ''):
                     return True
-    
-        # shot list是否被修改过
-        shot_list_count_new = len(self._shot_list)
-        if len(self.init_shot_list) != shot_list_count_new:
-            return True
-            
-        if len(self.init_shot_list) == shot_list_count_new:
-            for i in range(shot_list_count_new):
-                item_shot_new = self._shot_list[i]
-                item_shot_old = self.init_shot_list[i]
-
-                if not self.is_item_same(item_shot_old, item_shot_new, 'name'):
-                    return True
-
-                if not self.is_item_same(item_shot_old, item_shot_new, 'description'):
-                    return True
-
-                if not self.is_item_same(item_shot_old, item_shot_new, 'take_no'):
-                    return True
-                
-                if not self.is_item_same(item_shot_old, item_shot_new, 'shot_count'):
-                    return True
-                
+        
         return False
-
-    def is_item_same(self, item_old, item_new, key_name):
-        name_new = None
-        if key_name in item_new:
-            name_new = item_new[key_name]
-
-        name_old = None
-        if key_name in item_old:
-            name_old = item_old[key_name]
-
-        if name_new != name_old:
-            return False
-        else:
-            return True
 
     def open_project(self):
         # 打开文件对话框
@@ -557,12 +547,6 @@ class MainWindow(QMainWindow):
 
         self._save_fullpath = json_file
 
-        # 加载数据作为保存时对比用
-        if 'shots' in json_data:
-            self.init_shot_list = json_data['shots']
-        else:
-            self.init_shot_list = []
-
         # 自动加载保存的Excel文件
         if 'excel_file_path' in json_data and json_data['excel_file_path']:
             excel_path = json_data['excel_file_path']
@@ -581,41 +565,11 @@ class MainWindow(QMainWindow):
             else:
                 print(f"Excel文件不存在或路径无效: {excel_path}")
 
-        # 不再读取项目级takename/描述/脚本
-        
-        self._shotTable.setRowCount(len(self.init_shot_list))
-        row = 0
-        for shot in self.init_shot_list:
-            if shot is not None and len(shot) > 0:
-                # 判断键是否存在
-                if 'name' in shot:
-                    self._shotTable.setItem(row, 0, QTableWidgetItem(shot['name']))
-
-                if 'description' in shot:
-                    self._shotTable.setItem(row, 1, QTableWidgetItem(shot['description']))
-
-                if 'take_no' in shot:
-                    self._shotTable.setItem(row, 2, QTableWidgetItem(shot['take_no']))
-
-                if 'shot_count' in shot:
-                    self._shotTable.setItem(row, 3, QTableWidgetItem(shot['shot_count']))
-            
-            row += 1
-            
+        # 清空录制列表
         self._takelist.clear()
-        self._dict_takename.clear()
         
         # 设置UI状态：不从项目文件填充描述与脚本
-
-        #update ui
-        row = 0
-        self._table_takelist.setRowCount(len(self._takelist))
-
-        for _take in self._takelist:
-            self.updateTakeRow(row, _take)
-            row += 1
-
-        self._dict_shotname.shot_list_group_by(self._takelist)
+        self._table_takelist.setRowCount(0)
 
         self.mod_peel.load_data(json_file, 'replace')
         self._save_fullpath = json_file
@@ -653,16 +607,20 @@ class MainWindow(QMainWindow):
     def updateTakeRow(self, row, take_item):
         # 导出勾选框
         checkbox = QCheckBox()
-        checkbox.setChecked(True)  # 默认勾选
+        # 根据take_item的_export_selected属性设置勾选状态
+        export_selected = getattr(take_item, '_export_selected', True)
+        checkbox.setChecked(export_selected)
         # 设置勾选框样式为透明背景，保持原始勾选效果
         checkbox.setStyleSheet("""
             QCheckBox {
                 background: transparent;
             }
         """)
-        # 连接勾选状态变更事件
+        # 连接勾选状态变更事件（以录制ID作为标识）
         checkbox.stateChanged.connect(lambda state, r=row: self.on_export_checkbox_changed(r, state))
         self._table_takelist.setCellWidget(row, 0, checkbox)
+        
+        print(f"[DEBUG] updateTakeRow: 第{row}行任务 {take_item._task_id} 勾选框设置为: {export_selected}")
         
         # 任务ID
         twItem = QTableWidgetItem(take_item._task_id)
@@ -678,6 +636,10 @@ class MainWindow(QMainWindow):
         # 任务名称
         twItem = QTableWidgetItem(take_item._task_name)
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+        # 若已导出，则着色为暗蓝色（白字）
+        if getattr(take_item, '_exported', False):
+            twItem.setBackground(QColor(10, 36, 106))
+            twItem.setForeground(QColor(255, 255, 255))
         self._table_takelist.setItem(row, 3, twItem)
         
         # 开始时间
@@ -689,10 +651,16 @@ class MainWindow(QMainWindow):
         twItem = QTableWidgetItem(take_item._end_time.strftime('%H:%M:%S'))
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
         self._table_takelist.setItem(row, 5, twItem)
-
-        # 持续时间
-        twItem = QTableWidgetItem(f"{'{:.1f}'.format(take_item._due)} sec")
+        
+        # 是否导出
+        exported_status = getattr(take_item, '_exported', False)
+        twItem = QTableWidgetItem("True" if exported_status else "False")
         twItem.setFlags(twItem.flags() & ~Qt.ItemIsEditable)
+        # 根据导出状态设置字体颜色
+        if exported_status:
+            twItem.setForeground(QColor(100, 149, 237))  # 淡蓝色
+        else:
+            twItem.setForeground(QColor(255, 255, 255))  # 白色
         self._table_takelist.setItem(row, 6, twItem)
         
         # 状态下拉框（仅两个选项，默认"接受"）
@@ -719,8 +687,10 @@ class MainWindow(QMainWindow):
             if 0 <= row < len(self._takelist):
                 take_item = self._takelist[row]
                 is_checked = state == Qt.Checked
-                # 可以在TakeItem中添加一个属性来记录勾选状态
+                # 同步更新TakeItem的勾选状态
                 take_item._export_selected = is_checked
+                episode_id = getattr(take_item, '_episode_id', '')
+                print(f"[DEBUG] 录制 {episode_id} 导出状态变更: {'勾选' if is_checked else '取消勾选'}")
         except Exception as e:
             print(f"[ERROR] 处理导出勾选框状态变更失败: {e}")
 
@@ -794,7 +764,6 @@ class MainWindow(QMainWindow):
         if self._save_fullpath is None or len(self._save_fullpath) == 0:
             return False
         
-        self.update_shot_list_model()
         # 只保存设备配置信息，不包含takes数据
         devices = self.mod_peel.get_device_config_data()
         
@@ -806,7 +775,6 @@ class MainWindow(QMainWindow):
         
         json_data = { 
                      'devices': devices,
-                     'shots': self._shot_list,
                      'excel_file_path': excel_file_path
                      }
         
@@ -815,40 +783,6 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, AppName, self.tr("Project file saved failed: ") + self._save_fullpath)
 
         return save_result
-    
-    def update_shot_list_model(self):
-        self._shot_list.clear()
-        rows = self._shotTable.rowCount()
-        for row in range(rows):
-            row_data = {}
-            # Shot Name
-            itemName = self._shotTable.item(row, 0)
-            if itemName is not None:
-                row_data['name'] = itemName.text()
-
-            # Shot 描述
-            itemDesc = self._shotTable.item(row, 1)
-            if itemDesc is not None:
-                row_data['description'] = itemDesc.text()
-            
-            # 最大的Take#
-            itemTakeNo = self._shotTable.item(row, 2)
-            if itemTakeNo is not None:
-                row_data['take_no'] = itemTakeNo.text()
-
-            # 统计[Shot Name]总数
-            itemTakeCount = self._shotTable.item(row, 3)
-            if itemTakeCount is not None:
-                row_data['shot_count'] = itemTakeCount.text()
-
-            for shot in self.init_shot_list:
-                if shot is not None and len(shot) > 0:
-                    if 'name' in shot and shot['name'] == row_data['name']:
-                        if 'notes' in shot:
-                            row_data['notes'] = shot['notes']
-
-            self._shot_list.append(row_data)
-
 
     def collect_file(self):
         """收集文件：驱动设备导出，监听回调，发送给fileservice"""
@@ -867,15 +801,27 @@ class MainWindow(QMainWindow):
         
         # 计算本次需要导出的总数（以当前录制条目数为准）
         try:
-            # 获取所有勾选的任务
+            # 在导出前，用UI勾选框状态回写_take_item._export_selected，确保设备侧读取一致
+            for row in range(self._table_takelist.rowCount()):
+                if row < len(self._takelist):
+                    take_item = self._takelist[row]
+                    checkbox = self._table_takelist.cellWidget(row, 0)
+                    if checkbox and hasattr(checkbox, 'isChecked'):
+                        take_item._export_selected = bool(checkbox.isChecked())
+
+            # 获取所有勾选的任务 - 直接检查UI勾选框状态
             self._export_tasks = []
-            for take_item in self._takelist:
-                if hasattr(take_item, '_export_selected') and take_item._export_selected:
-                    self._export_tasks.append({
-                        'take_name': take_item._take_name,
-                        'status': 'waiting',
-                        'message': '等待导出'
-                    })
+            for row in range(self._table_takelist.rowCount()):
+                if row < len(self._takelist):
+                    take_item = self._takelist[row]
+                    # 检查UI勾选框状态（第0列）
+                    checkbox = self._table_takelist.cellWidget(row, 0)
+                    if checkbox and checkbox.isChecked():
+                        self._export_tasks.append({
+                            'take_name': take_item._take_name,
+                            'status': 'waiting',
+                            'message': '等待导出'
+                        })
             
             self._collect_total = len(self._export_tasks)
             if self._collect_total == 0:
@@ -956,18 +902,30 @@ class MainWindow(QMainWindow):
         """获取任务信息"""
         try:
             # 从任务列表组件获取任务信息
-            if hasattr(self, '_taskListWidget') and self._taskListWidget:
-                task = self._taskListWidget.data_manager.get_task_by_id(task_id)
-                if task:
-                    return {
-                        'task_name_en': task.task_name_en,
-                        'task_name_cn': task.task_name_cn,
-                        'scenarios': task.scenarios,
-                        'action_text_en': task.action_text_en,
-                        'action_text_cn': task.action_text_cn
-                    }
+            print(f"[DEBUG] 尝试获取任务信息: task_id={task_id}")
+            print(f"[DEBUG] _taskListWidget存在: {hasattr(self, '_taskListWidget')}")
+            if hasattr(self, '_taskListWidget'):
+                print(f"[DEBUG] _taskListWidget不为空: {self._taskListWidget is not None}")
+                if self._taskListWidget:
+                    print(f"[DEBUG] data_manager存在: {hasattr(self._taskListWidget, 'data_manager')}")
+                    if hasattr(self._taskListWidget, 'data_manager'):
+                        task = self._taskListWidget.data_manager.get_task_by_id(task_id)
+                        if task:
+                            task_info = {
+                                'task_name_en': task.task_name_en,
+                                'task_name_cn': task.task_name_cn,
+                                'scenarios': task.scenarios,
+                                'action_text_en': task.action_text_en,
+                                'action_text_cn': task.action_text_cn
+                            }
+                            print(f"[DEBUG] 获取到任务信息: task_id={task_id}, task_name_cn={task.task_name_cn}, task_name_en={task.task_name_en}")
+                            return task_info
+                        else:
+                            print(f"[DEBUG] 未找到任务 {task_id}")
+                    else:
+                        print(f"[DEBUG] data_manager不存在")
                 else:
-                    print(f"[DEBUG] 未找到任务 {task_id}")
+                    print(f"[DEBUG] _taskListWidget为空")
             else:
                 print(f"[DEBUG] 没有_taskListWidget组件")
         except Exception as e:
@@ -1016,8 +974,10 @@ class MainWindow(QMainWindow):
                     'init_scene_text': scene_text,
                     'action_config': action_config,
                     'task_status': 'pending',  # 默认为待审核状态
-                    'recording_end_time': take_item._end_time  # 保存录制结束时间
+                    'recording_end_time': take_item._end_time.isoformat()  # 保存录制结束时间（转换为ISO格式字符串）
                 }
+                
+                print(f"[DEBUG] 保存任务到数据库: task_id={task_id}, task_name_cn={task_name_cn}, recording_end_time={take_item._end_time}")
                 
                 result = self.db_controller.update_task_by_task_id(str(task_id), update_data)
                 
@@ -1361,7 +1321,7 @@ class MainWindow(QMainWindow):
                          "任务名称", 
                          "开始时间", 
                          "结束时间", 
-                         "持续时间",
+                         "是否导出",
                          "状态"]
         takelistWidget.setColumnCount(len(header_labels))
         takelistWidget.setHorizontalHeaderLabels(header_labels)
@@ -1388,7 +1348,7 @@ class MainWindow(QMainWindow):
         takelistWidget.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)           # 任务名称
         takelistWidget.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)  # 开始时间
         takelistWidget.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)  # 结束时间
-        takelistWidget.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 持续时间
+        takelistWidget.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)  # 是否导出
         takelistWidget.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)  # 状态
 
         # 设置行高
@@ -1465,7 +1425,10 @@ class MainWindow(QMainWindow):
                 checkbox = self._table_takelist.cellWidget(row, 0)
                 if checkbox and hasattr(checkbox, 'setChecked'):
                     checkbox.setChecked(True)
-            print("[DEBUG] 已全选所有导出任务")
+                    # 同时更新TakeItem的_export_selected属性
+                    if row < len(self._takelist):
+                        take_item = self._takelist[row]
+                        take_item._export_selected = True
         except Exception as e:
             print(f"[ERROR] 全选导出任务失败: {e}")
 
@@ -1476,7 +1439,10 @@ class MainWindow(QMainWindow):
                 checkbox = self._table_takelist.cellWidget(row, 0)
                 if checkbox and hasattr(checkbox, 'setChecked'):
                     checkbox.setChecked(False)
-            print("[DEBUG] 已取消全选所有导出任务")
+                    # 同时更新TakeItem的_export_selected属性
+                    if row < len(self._takelist):
+                        take_item = self._takelist[row]
+                        take_item._export_selected = False
         except Exception as e:
             print(f"[ERROR] 取消全选导出任务失败: {e}")
 
@@ -1584,16 +1550,10 @@ class MainWindow(QMainWindow):
             rows.sort(reverse=True)
             for row in rows:
                 self._table_takelist.removeRow(row)
-                shot = self._takelist.pop(row)
-                # 仅当存在有效take_name时再同步字典与设备
-                if getattr(shot, "_take_name", None):
-                    if shot._take_name in self._dict_takename:
-                        self._dict_takename.pop(shot._take_name)
-                        self.delete_device_take(shot._take_name)
-
-            # 更新场景切换表格
-            self._dict_shotname.shot_list_group_by(self._takelist)
-            self.update_shotlist()
+                take_item = self._takelist.pop(row)
+                # 删除设备中的take数据
+                if getattr(take_item, "_take_name", None):
+                    self.delete_device_take(take_item._take_name)
             
     # 删除设备中的takes元素        
     def delete_device_take(self, shot_name):
@@ -1616,8 +1576,6 @@ class MainWindow(QMainWindow):
             self._table_takelist.clearContents()
             self._table_takelist.setRowCount(0)
             self._takelist.clear()
-            self._dict_takename.clear()
-            self._dict_shotname.clear()
 
     def create_recordpanel(self, splitter):
         widget = QWidget(splitter)
@@ -1814,10 +1772,9 @@ class MainWindow(QMainWindow):
         self._lbl_recording_tips.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         
         # 设置提示内容
-        tips_content = """1. 点击录制会有三秒的准备时间。
-2. 左侧动作列表高亮后再进行操作。
-3. 完成一个动作后稍作停顿，等待下个动作列表高亮后操作。
-4. 完成所有动作后，会自动结束录制。"""
+        tips_content = """1. 点击开始录制有3秒准备等待时间。
+2. 点击停止录制有3秒结束等待时间。
+"""
         self._lbl_recording_tips.setText(tips_content)
         
         vboxLayout.addWidget(self._lbl_recording_tips)
@@ -2043,9 +2000,6 @@ class MainWindow(QMainWindow):
         self.updateLabelTakeName()
 
     def clearAllUiControl(self):
-        self._shotTable.clearContents()
-        self._shotTable.setRowCount(0)
-
         self._deviceTable.clearContents()
         self._deviceTable.setRowCount(0)
 
@@ -2081,57 +2035,6 @@ class MainWindow(QMainWindow):
 
         self._will_save = True
     
-    # 添加场景列表
-    def shotlist_add(self):
-        row_cnt = self._shotTable.rowCount() + 1
-        self._shotTable.setRowCount(row_cnt)
-
-    # 删除场景列表
-    def shotlist_delete(self):
-        selected_rows = []
-        selectedIndexes = self._shotTable.selectedIndexes()
-        for item in selectedIndexes:
-            item_row = item.row()
-            if item_row not in selected_rows:
-                selected_rows.append(item_row)
-
-        # 从后往前删除，避免索引变化
-        selected_rows.sort(reverse=True)
-
-        for row in selected_rows:
-            self._shotTable.removeRow(row)
-
-
-    def shotTable_sectionClicked(self, row):
-        itemShotName = self._shotTable.item(row, 0)
-        if itemShotName is None:
-            return
-        
-        shot_name = itemShotName.text()
-        
-        shot_desc = ''
-        itemShotDess = self._shotTable.item(row, 1)
-        if itemShotDess is not None:
-            shot_desc = itemShotDess.text()
-
-        take_info = self._dict_shotname.take_info(shot_name)
-
-        take_no = '1'
-        if take_info is not None:
-            take_no = str(take_info[0] + 1)
-
-        self._edt_shotName.setText(shot_name)
-        self._edt_desc.setText(shot_desc)
-        for shot in self.init_shot_list:
-            if shot['name'] == shot_name:
-                if 'notes' in shot:
-                    self._edt_notes.clear()
-                    lines = shot['notes'].split('\n')
-                    for line in lines:
-                        if line.strip():
-                            self._edt_notes.addItem(line.strip())
-        
-        self.updateLabelTakeName()
 
     def connect_avatar_signals(self):
         """连接CMAvatar设备的信号"""
@@ -2209,10 +2112,57 @@ class MainWindow(QMainWindow):
             # 导出成功，发送给fileservice
             print(f"[DEBUG] 导出完成，发送给fileservice: {take_name}, 文件数量: {len(file_paths)}")
             self._send_to_fileservice(take_name, file_paths)
+
+            # 标记后端 exported=true，并更新UI着色
+            try:
+                # 从 _takelist 中找到此 take 的 episode_id
+                episode_id = None
+                for ti in self._takelist:
+                    if getattr(ti, '_take_name', '') == take_name:
+                        episode_id = getattr(ti, '_episode_id', None)
+                        # 本地状态标记为已导出，便于立即刷新主列表着色
+                        setattr(ti, '_exported', True)
+                        break
+                if episode_id:
+                    # 调用后端置导出标志
+                    if hasattr(self, 'db_controller') and self.db_controller:
+                        self.db_controller.set_task_exported(episode_id, True)
+                    # 主界面take列表着色（通过列2匹配episode_id，给列3着色）
+                    self._mark_take_exported_in_main_list(episode_id)
+                    # 更新导出进度弹窗内该行的颜色（任务名称列）
+                    if hasattr(self, '_export_table') and self._export_table:
+                        row_count = self._export_table.rowCount()
+                        for r in range(row_count):
+                            name_item = self._export_table.item(r, 0)
+                            if name_item and name_item.text() == take_name:
+                                name_item.setBackground(QColor(10, 36, 106))  # 暗蓝色
+                                name_item.setForeground(QColor(255, 255, 255))  # 白字以便可读
+                                break
+                else:
+                    print(f"[WARN] 未找到对应的episode_id用于设置exported: {take_name}")
+            except Exception as e:
+                print(f"[ERROR] 设置导出标志或更新着色失败: {e}")
         else:
             # 导出失败
             self.statusBar().showMessage(f"导出失败: {export_message}", 3000)
             print(f"[ERROR] 导出失败: {export_message}")
+
+    def _mark_take_exported_in_main_list(self, episode_id: str):
+        """在主界面take列表中，依据episode_id精确匹配并将是否导出列更新为True"""
+        try:
+            if not hasattr(self, '_table_takelist') or not self._table_takelist:
+                return
+            for row in range(self._table_takelist.rowCount()):
+                item_episode = self._table_takelist.item(row, 2)  # 列2是录制ID(episode_id)
+                if item_episode and item_episode.text() == str(episode_id):
+                    # 更新是否导出列（第7列）
+                    exported_item = self._table_takelist.item(row, 7)
+                    if exported_item:
+                        exported_item.setText("True")
+                        exported_item.setForeground(QColor(100, 149, 237))  # 淡蓝色
+                    break
+        except Exception as e:
+            print(f"[ERROR] 主界面着色失败: {e}")
 
     def _update_task_status(self, take_name, success, message):
         """更新导出任务状态"""
@@ -2230,6 +2180,15 @@ class MainWindow(QMainWindow):
             
             # 更新表格显示
             self._update_export_table()
+            # 若成功则在表格中将名称列标记为暗蓝色
+            if success and hasattr(self, '_export_table') and self._export_table:
+                row_count = self._export_table.rowCount()
+                for r in range(row_count):
+                    name_item = self._export_table.item(r, 0)
+                    if name_item and name_item.text() == take_name:
+                        name_item.setBackground(QColor(10, 36, 106))
+                        name_item.setForeground(QColor(255, 255, 255))
+                        break
             
             # 检查是否所有任务都完成了
             all_completed = all(task['status'] in ['success', 'failed'] for task in self._export_tasks)
@@ -2299,14 +2258,6 @@ class MainWindow(QMainWindow):
                 status_item = QTableWidgetItem(task['message'])
                 status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
                 
-                # 根据状态设置颜色
-                if task['status'] == 'success':
-                    status_item.setBackground(QColor(200, 255, 200))  # 浅绿色
-                elif task['status'] == 'failed':
-                    status_item.setBackground(QColor(255, 200, 200))  # 浅红色
-                else:  # waiting
-                    status_item.setBackground(QColor(255, 255, 200))  # 浅黄色
-                
                 self._export_table.setItem(row, 1, status_item)
             
             # 自动调整行高
@@ -2342,7 +2293,6 @@ class MainWindow(QMainWindow):
             # 准备发送给fileservice的数据
             upload_data = {
                 "folder_paths": [file_path],  # 直接发送文件路径
-                "server_url": "http://localhost:8000",  # Django服务器地址
                 "auth_token": "default_token_123"
             }
             
@@ -2350,7 +2300,7 @@ class MainWindow(QMainWindow):
             response = requests.post(
                 f"{fileservice_url}/fileservice/upload/",
                 json=upload_data,
-                timeout=10
+                timeout=20  # 增加超时时间到20秒，文件上传可能需要更长时间
             )
             
             if response.status_code == 200:
@@ -2433,10 +2383,6 @@ class MainWindow(QMainWindow):
         
         # 禁用录制按钮防止重复点击
         self._btn_record.setEnabled(False)
-        
-        # 更新索引 - 使用当前任务信息
-        self._dict_shotname.add_shot_with_take(shot_name, take_no)
-        self.update_shotlist()
         
         self._will_save = True
 
@@ -2534,25 +2480,6 @@ class MainWindow(QMainWindow):
             self._takelist[-1].add_action(actionInfo)
         else:
             print(f"警告: 没有正在录制的take，忽略动作回调 (row={row})")
-
-    # 根据shot name更新ShotList的序号列
-    def update_shotlist(self):
-
-        # 更新Shot List
-        rows = self._shotTable.rowCount()
-        for row in range(rows):
-            item_shot_name = self._shotTable.item(row, 0)
-            if item_shot_name is None:
-                continue
-
-            item_shot_name_value = item_shot_name.text()
-            if item_shot_name_value is None or len(item_shot_name_value) == 0:
-                continue
-
-            take_info = self._dict_shotname.take_info(item_shot_name_value)
-            if take_info is not None:
-                self._shotTable.setItem(row, 2, QTableWidgetItem(str(take_info[0])))
-                self._shotTable.setItem(row, 3, QTableWidgetItem(str(take_info[1])))
 
     # 下拉选择评分
     def onComboBoxIndexChanged(self, index):
@@ -2652,53 +2579,65 @@ class MainWindow(QMainWindow):
         take_no = 1  # 固定为1
         record_id = len(self._takelist) + 1
 
-        # 在开始录制前：从任务列表获取真实任务名称，创建后端 TaskInfo 并从数据库读取 task_name 与 episode_id
-        episode_id_str = ""
-        db_task_name = ""
+        # 直接从任务模板获取中英文名称
+        task_template = None
+        task_name_en = ""
+        task_name_cn = ""
         
-        # 从任务列表组件获取真实的任务名称
-        real_task_name = ""
         try:
             if hasattr(self, '_taskListWidget') and self._taskListWidget:
-                task = self._taskListWidget.data_manager.get_task_by_id(shot_name)
-                if task:
-                    real_task_name = task.task_name_en or task.task_name_cn or shot_name
+                task_template = self._taskListWidget.data_manager.get_task_by_id(shot_name)
+                if task_template:
+                    task_name_en = task_template.task_name_en
+                    task_name_cn = task_template.task_name_cn
+                    print(f"[DEBUG] 从任务模板获取: task_name_en={task_name_en}, task_name_cn={task_name_cn}")
                 else:
-                    real_task_name = shot_name
-            else:
-                real_task_name = shot_name
+                    print(f"[WARN] 未找到任务模板: {shot_name}")
+                    task_name_en = shot_name  # 回退到任务ID
         except Exception as e:
-            real_task_name = shot_name
-        
-        # 在录制开始时保存到数据库，生成episode_id
+            print(f"[ERROR] 获取任务模板失败: {e}")
+            task_name_en = shot_name  # 回退到任务ID
+
+        # 在录制开始时保存到数据库，同时保存中英文名称
+        episode_id_str = ""
         try:
             collector_id = 0
             if self.current_collector and isinstance(self.current_collector, dict):
-                # 兼容登录返回结构：可能是 { 'collector_id': int, 'username': ... }
                 collector_id = self.current_collector.get('collector_id') or self.current_collector.get('id') or 0
-            # 使用业务 task_id 为 shot_name，task_name 使用真实的任务名称
+            
             action_config = []
             init_scene_text = self._edt_desc.text() if hasattr(self, '_edt_desc') else ""
             task_status = 'pending'
-            task_info_id = self.db_controller.save_full_episode(int(collector_id or 0), "", shot_name, real_task_name, init_scene_text, action_config, task_status)
-            # 立即查询数据库，获取真实的 task_name 与 episode_id
+            
+            # 保存到数据库，同时传递中英文名称
+            task_info_id = self.db_controller.save_full_episode(
+                int(collector_id or 0), 
+                "", 
+                shot_name, 
+                task_name_en,  # 英文名称
+                init_scene_text, 
+                action_config, 
+                task_status,
+                task_name_cn    # 中文名称
+            )
+            
+            # 获取episode_id
             task_info = self.db_controller.get_task_info_by_task_id(shot_name)
             if task_info:
-                # 后端视图按约定会返回包含 task_name 与 episode_id 的序列化数据
-                db_task_name = str(task_info.get('task_name') or real_task_name)
                 episode_id_val = task_info.get('episode_id')
                 if episode_id_val is not None:
                     episode_id_str = str(episode_id_val)
+                    print(f"[DEBUG] 获取到episode_id: {episode_id_str}")
         except Exception as e:
-            # 若后端创建失败，不阻塞录制，仅回退使用空episode_id
+            print(f"[ERROR] 保存到数据库失败: {e}")
             episode_id_str = ""
-            db_task_name = real_task_name
 
-        # 创建TakeItem来生成take_name
+        # 创建TakeItem（直接使用任务模板的数据）
         temp_take_item = TakeItem(
             task_id=shot_name,
-            task_name=db_task_name or real_task_name,
-            episode_id=episode_id_str
+            task_name=task_name_en,      # 直接使用英文名称
+            episode_id=episode_id_str,
+            take_name_cn=task_name_cn    # 直接使用中文名称
         )
         
         # 使用TakeItem的take_name作为录制参数
@@ -2729,14 +2668,15 @@ class MainWindow(QMainWindow):
         strDesc = self._edt_desc.text()
         strNotes = '\n'.join(self.get_notes_text())
         
-        # 使用新的构造函数创建TakeItem
+        # 使用新的构造函数创建TakeItem（直接使用任务模板的数据）
         takeItem = TakeItem(
             task_id=shot_name,
-            task_name=db_task_name or real_task_name,
+            task_name=task_name_en,      # 直接使用英文名称
             episode_id=episode_id_str,
             take_desc=strDesc,
             take_note=strNotes,
-            record_id=record_id
+            record_id=record_id,
+            take_name_cn=task_name_cn    # 直接使用中文名称
         )
         
         # 设置默认导出勾选状态

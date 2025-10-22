@@ -10,8 +10,8 @@ import glob
 import requests
 import zipfile
 import tempfile
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog
-from PySide6.QtCore import QCoreApplication, QThread, Signal
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressDialog, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QRadioButton, QButtonGroup
+from PySide6.QtCore import QCoreApplication, QThread, Signal, Qt
 
 
 class ExportWorker(QThread):
@@ -20,16 +20,17 @@ class ExportWorker(QThread):
     download_progress_updated = Signal(int, str)  # 下载进度, 消息
     export_completed = Signal(bool, str)  # 成功, 消息
     
-    def __init__(self, api_client, export_dir):
+    def __init__(self, api_client, export_dir, selected_tasks=None):
         super().__init__()
         self.api_client = api_client
         self.export_dir = export_dir
+        self.selected_tasks = selected_tasks  # 勾选的任务列表
     
     def run(self):
         try:
             # 1. 启动后端导出
             self.export_progress_updated.emit(10, "正在启动后端导出...")
-            export_result = self.api_client.start_export()
+            export_result = self.api_client.start_export(selected_tasks=self.selected_tasks)
             if not export_result:
                 self.export_completed.emit(False, "启动后端导出失败")
                 return
@@ -161,6 +162,69 @@ class ExportWorker(QThread):
             return False
 
 
+class ExportOptionsDialog(QDialog):
+    """导出选项对话框"""
+    
+    def __init__(self, parent=None, has_selected_tasks=False):
+        super().__init__(parent)
+        self.has_selected_tasks = has_selected_tasks
+        self.export_mode = "all"  # 默认导出所有
+        self.initUI()
+    
+    def initUI(self):
+        self.setWindowTitle("选择导出方式")
+        self.setFixedSize(400, 200)
+        
+        layout = QVBoxLayout()
+        
+        # 标题
+        title_label = QLabel("请选择要导出的数据：")
+        title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        layout.addWidget(title_label)
+        
+        # 单选按钮组
+        self.button_group = QButtonGroup()
+        
+        # 导出所有数据
+        self.radio_all = QRadioButton("导出所有数据")
+        self.radio_all.setChecked(True)
+        self.button_group.addButton(self.radio_all, 0)
+        layout.addWidget(self.radio_all)
+        
+        # 导出勾选数据（仅当有勾选任务时显示）
+        if self.has_selected_tasks:
+            self.radio_selected = QRadioButton("仅导出勾选的数据")
+            self.button_group.addButton(self.radio_selected, 1)
+            layout.addWidget(self.radio_selected)
+        else:
+            # 如果没有勾选任务，显示提示
+            no_selected_label = QLabel("（当前没有勾选的任务）")
+            no_selected_label.setStyleSheet("color: gray; font-style: italic;")
+            layout.addWidget(no_selected_label)
+        
+        # 按钮
+        button_layout = QHBoxLayout()
+        
+        self.ok_button = QPushButton("确定")
+        self.ok_button.clicked.connect(self.accept)
+        
+        self.cancel_button = QPushButton("取消")
+        self.cancel_button.clicked.connect(self.reject)
+        
+        button_layout.addWidget(self.ok_button)
+        button_layout.addWidget(self.cancel_button)
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_export_mode(self):
+        """获取选择的导出模式"""
+        if self.button_group.checkedId() == 0:
+            return "all"
+        else:
+            return "selected"
+
+
 class ExportManager:
     """数据导出管理器"""
     
@@ -183,9 +247,26 @@ class ExportManager:
         调用后端导出API，下载生成的CMAvatar_data目录到本地
         
         Args:
-            takelist: 录制列表（不再使用，直接导出所有数据）
+            takelist: 录制列表，用于获取勾选的任务
             open_folder: 默认打开文件夹路径
         """
+        # 获取勾选的任务
+        selected_tasks = self._get_selected_tasks(takelist)
+        has_selected_tasks = len(selected_tasks) > 0
+        
+        # 显示导出选项对话框
+        options_dialog = ExportOptionsDialog(self.parent_widget, has_selected_tasks)
+        if options_dialog.exec() != QDialog.Accepted:
+            return
+        
+        export_mode = options_dialog.get_export_mode()
+        
+        # 根据选择确定要导出的任务
+        if export_mode == "selected" and has_selected_tasks:
+            tasks_to_export = selected_tasks
+        else:
+            tasks_to_export = None  # 导出所有
+        
         # 选择导出根目录
         export_dir = QFileDialog.getExistingDirectory(
             self.parent_widget, 
@@ -211,11 +292,78 @@ class ExportManager:
         self.export_progress_dialog.setValue(0)
         
         # 创建并启动导出工作线程
-        self.export_worker = ExportWorker(self.db_controller.api_client, export_dir)
+        self.export_worker = ExportWorker(self.db_controller.api_client, export_dir, tasks_to_export)
         self.export_worker.export_progress_updated.connect(self._on_export_progress_updated)
         self.export_worker.download_progress_updated.connect(self._on_download_progress_updated)
         self.export_worker.export_completed.connect(self._on_export_completed)
         self.export_worker.start()
+    
+    def _get_selected_tasks(self, takelist):
+        """从录制列表中获取勾选的任务"""
+        selected_tasks = []
+        
+        # 如果takelist是列表，说明是旧的录制列表格式
+        if isinstance(takelist, list):
+            # 从主窗口获取任务表格
+            if hasattr(self.parent_widget, '_table_takelist'):
+                table_takelist = self.parent_widget._table_takelist
+                if table_takelist:
+                    # 获取表格中勾选的任务
+                    selected_tasks = self._get_selected_tasks_from_table(table_takelist)
+            return selected_tasks
+        
+        # 如果takelist是QTableWidget或类似组件
+        if hasattr(takelist, 'rowCount'):
+            selected_tasks = self._get_selected_tasks_from_table(takelist)
+        
+        return selected_tasks
+    
+    def _get_selected_tasks_from_table(self, table):
+        """从表格中获取勾选的任务"""
+        selected_tasks = []
+        
+        for row in range(table.rowCount()):
+            # 检查导出勾选框状态（第0列）
+            checkbox = table.cellWidget(row, 0)
+            if checkbox and checkbox.isChecked():
+                # 从主窗口的_takelist中获取对应的TakeItem对象
+                if hasattr(self.parent_widget, '_takelist') and row < len(self.parent_widget._takelist):
+                    take_item = self.parent_widget._takelist[row]
+                    if hasattr(take_item, '_take_name') and take_item._take_name:
+                        selected_tasks.append(take_item._take_name)
+                        print(f"[DEBUG] 找到勾选的任务: {take_item._take_name}")
+                    else:
+                        print(f"[DEBUG] 警告: 第{row}行的TakeItem没有_take_name")
+                else:
+                    print(f"[DEBUG] 警告: 无法获取第{row}行的TakeItem对象")
+        
+        print(f"[DEBUG] 总共找到 {len(selected_tasks)} 个勾选的任务")
+        return selected_tasks
+    
+    def _get_selected_tasks_from_widget(self, task_list_widget):
+        """从任务列表组件中获取勾选的任务"""
+        selected_tasks = []
+        
+        # 遍历任务树的所有项目
+        def traverse_tree(item):
+            if item.childCount() > 0:
+                # 这是一个父节点（场景），遍历子节点
+                for i in range(item.childCount()):
+                    traverse_tree(item.child(i))
+            else:
+                # 这是一个任务节点
+                task_data = item.data(0, Qt.UserRole)
+                if task_data and hasattr(task_data, 'task_id'):
+                    # 检查是否勾选（这里需要根据实际的勾选机制来实现）
+                    # 暂时返回所有任务，因为任务列表组件可能没有勾选功能
+                    pass
+        
+        # 遍历根节点
+        root = task_list_widget.task_tree.invisibleRootItem()
+        for i in range(root.childCount()):
+            traverse_tree(root.child(i))
+        
+        return selected_tasks
     
     def _on_export_progress_updated(self, progress, message):
         """更新导出进度"""

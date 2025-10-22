@@ -316,19 +316,36 @@ class CMAvatar(PeelDeviceBase):
             exportPath = ""
             
             takeTable = self.GetTakeInfo()
+            if not takeTable:
+                print(f"[ERROR] 无法获取任务表格")
+                return
+            
+            # 获取主窗口的_takelist
+            from PeelApp import cmd
+            main_window = cmd.getMainWindow()
+            if not main_window or not hasattr(main_window, '_takelist'):
+                print(f"[ERROR] 无法获取主窗口的_takelist")
+                return
+            
+            takelist = main_window._takelist
+            
             for row in range(takeTable.rowCount()):
                 # 检查导出勾选框状态（第0列）
                 checkbox = takeTable.cellWidget(row, 0)
                 if checkbox and checkbox.isChecked():
-                    # 获取任务名称（第3列，因为添加了勾选框列）
-                    item = takeTable.item(row, 3)
-                    if item:
-                        take_name = item.text()
-                        print(f"[DEBUG] 导出勾选的任务: {take_name}")
-                        self.client.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
-                        self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
+                    # 直接从TakeItem获取take_name
+                    if row < len(takelist):
+                        take_item = takelist[row]
+                        take_name = getattr(take_item, '_take_name', '')
+                        
+                        if take_name:
+                            print(f"[DEBUG] 导出勾选的任务: {take_name}")
+                            self.client.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
+                            self.clientTransform.send_message(common.cmd_req_export, (self.listen_ip, self.listen_port, exportPath, take_name))
+                        else:
+                            print(f"[ERROR] 第{row}行TakeItem的_take_name为空，数据异常！")
                     else:
-                        print(f"[WARNING] 第{row}行任务名称为空，跳过导出")
+                        print(f"[ERROR] 第{row}行无法获取TakeItem对象，数据异常！")
                 else:
                     print(f"[DEBUG] 第{row}行任务未勾选，跳过导出")
 
@@ -400,10 +417,15 @@ class CMAvatar(PeelDeviceBase):
                     # 没有失败原因，表示导出成功
                     if file_paths_string and isinstance(file_paths_string, str):
                         file_paths = [path.strip() for path in file_paths_string.split(',') if path.strip()]
-                        # 从第一个文件路径中提取take_name
+                        # 纯字符串解析，不依赖本机路径是否存在：
+                        # 取路径末段；若末段看起来是文件名（包含点），则改取父目录名
                         if file_paths:
-                            first_file = file_paths[0]
-                            take_name = os.path.basename(os.path.dirname(first_file))
+                            first_path = file_paths[0].rstrip('/\\')
+                            tail = os.path.basename(first_path)
+                            if '.' in tail:
+                                take_name = os.path.basename(os.path.dirname(first_path))
+                            else:
+                                take_name = tail
                         else:
                             take_name = ""
                     else:
@@ -439,8 +461,19 @@ class CMAvatar(PeelDeviceBase):
             print(f"[DEBUG] 导出完成回调: result={export_result}, take_name={take_name}, file_paths={file_paths}")
             
             # 发送信号通知主窗口导出完成
-            if export_result and take_name and file_paths:
-                self.export_completed.emit(export_result, export_message, take_name, file_paths)
+            if export_result and file_paths:
+                # 如果返回了多个路径，则逐个发出完成信号，确保每个take独立处理
+                try:
+                    for p in file_paths:
+                        p_norm = p.rstrip('/\\')
+                        tail = os.path.basename(p_norm)
+                        tn = tail if '.' not in tail else os.path.basename(os.path.dirname(p_norm))
+                        self.export_completed.emit(True, export_message, tn, [p])
+                except Exception as e:
+                    print(f"[WARNING] 拆分导出完成列表失败: {e}")
+                    # 回退为一次性发送
+                    if take_name:
+                        self.export_completed.emit(export_result, export_message, take_name, file_paths)
             else:
                 print(f"[WARNING] 导出失败或参数不完整: result={export_result}, take_name={take_name}, file_paths={file_paths}")
             
@@ -572,108 +605,16 @@ class CMAvatar(PeelDeviceBase):
         return self.takes.keys()
     
     def GetTakeInfo(self):
-        """获取take信息表格 - 从主窗口获取任务信息"""
+        """获取take信息表格 - 直接返回主窗口的真实表格"""
         from PeelApp import cmd
         
         # 获取主窗口实例
         main_window = cmd.getMainWindow()
         if not main_window:
-            return MockTable([])
+            return None
         
-        # 获取主窗口的任务列表
-        takelist = getattr(main_window, '_takelist', [])
-        if not takelist:
-            return MockTable([])
-        
-        class MockTable:
-            def __init__(self, takelist):
-                self.takelist = takelist
-                
-            def rowCount(self):
-                return len(self.takelist)
-                
-            def get_episode_id_from_db(self, take_item):
-                """从数据库获取episode_id"""
-                try:
-                    # 获取主窗口的数据库控制器
-                    main_window = cmd.getMainWindow()
-                    if not main_window or not hasattr(main_window, 'db_controller'):
-                        return 'unknown'
-                    
-                    db_controller = main_window.db_controller
-                    task_id = getattr(take_item, '_task_id', None)
-                    
-                    if not task_id:
-                        return 'unknown'
-                    
-                    # 从数据库查询TaskInfo记录
-                    task_info = db_controller.get_task_info_by_task_id(task_id)
-                    if task_info and 'episode_id' in task_info:
-                        return str(task_info['episode_id'])
-                    
-                    return 'unknown'
-                except Exception as e:
-                    print(f"获取episode_id失败: {e}")
-                    return 'unknown'
-                
-            def item(self, row, col):
-                if col == 3 and row < len(self.takelist):  # 第3列是任务名称（因为添加了勾选框列）
-                    take_item = self.takelist[row]
-
-                    # 直接使用TakeItem的take_name字段
-                    take_name = getattr(take_item, '_take_name', '')
-                    
-                    # 如果take_name为空，尝试重新生成
-                    if not take_name:
-                        task_id = getattr(take_item, '_task_id', '') or ''
-                        task_name = getattr(take_item, '_task_name', '') or ''
-                        episode_id = getattr(take_item, '_episode_id', '') or ''
-                        
-                        if task_name and task_id and episode_id:
-                            take_name = f"{task_name}_{task_id}_{episode_id}"
-                        elif task_name and task_id:
-                            take_name = f"{task_name}_{task_id}"
-
-                    class MockItem:
-                        def __init__(self, text):
-                            self.text_value = text
-                        def text(self):
-                            return self.text_value
-                    return MockItem(take_name)
-                return None
-                
-            def cellWidget(self, row, col):
-                if col == 0 and row < len(self.takelist):  # 第0列是导出勾选框
-                    take_item = self.takelist[row]
-                    # 检查是否勾选导出（默认勾选）
-                    export_selected = getattr(take_item, '_export_selected', True)
-                    
-                    class MockCheckBox:
-                        def __init__(self, checked):
-                            self.checked = checked
-                        def isChecked(self):
-                            return self.checked
-                    return MockCheckBox(export_selected)
-                elif col == 7 and row < len(self.takelist):  # 第7列是状态下拉框
-                    take_item = self.takelist[row]
-                    task_status = getattr(take_item, '_task_status', 'pending')
-                    
-                    class MockComboBox:
-                        def __init__(self, status):
-                            # 将状态映射到中文显示
-                            status_map = {
-                                'pending': '待处理',
-                                'accepted': '接受', 
-                                'rejected': '已拒绝',
-                                'ng': 'NG'
-                            }
-                            self.current_text = status_map.get(status, '待处理')
-                        def currentText(self):
-                            return self.current_text
-                    return MockComboBox(task_status)
-                return None
-        
-        return MockTable(takelist)
+        # 直接返回真实的QTableWidget
+        return main_window.get_takelist_table()
 
 
 class CMAvatarDownloadThread(DownloadThread):

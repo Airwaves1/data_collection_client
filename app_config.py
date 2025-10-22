@@ -13,7 +13,6 @@ class AppConfig:
         try:
             self.save_ui_table_info('TakeTable', mainWnd._table_takelist)
             self.save_ui_table_info('DeviceTable', mainWnd._deviceTable)
-            self.save_ui_table_info('ShotTable', mainWnd._shotTable)
         except Exception as e:
             msg = f'Save UI info to register failed, Exception: {e}'
             mylogger.error(msg)
@@ -25,7 +24,6 @@ class AppConfig:
             # 加载表格列宽信息
             self.load_ui_table_info('TakeTable', mainWnd._table_takelist)
             self.load_ui_table_info('DeviceTable', mainWnd._deviceTable)
-            self.load_ui_table_info('ShotTable', mainWnd._shotTable)
 
             # 加载文件路径信息
             mainWnd._save_fullpath = self._settings.value('LastOpenFile', '')
